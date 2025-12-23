@@ -21,7 +21,7 @@
                     }
                 },
                 {
-                    "source": "C:\\Users\\Dell\\.gradle\\caches\\8.9\\transforms\\c52928e051c8955ca41d45bbf9d92f41\\transformed\\material3-release\\res\\values-lv\\values-lv.xml",
+                    "source": "C:\\Users\\Dell\\.gradle\\caches\\8.9\\transforms\\f22f1d37d2d69e643aa2d57cb78bb866\\transformed\\jetified-material3-release\\res\\values-lv\\values-lv.xml",
                     "from": {
                         "startLines": "2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58",
                         "startColumns": "4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4",
@@ -35,23 +35,6 @@
                         "startOffsets": "4370,4497,4624,4739,4864,4973,5073,5190,5328,5446,5593,5679,5777,5871,5972,6091,6215,6318,6456,6587,6725,6908,7040,7159,7286,7406,7501,7600,7721,7856,7958,8072,8178,8313,8458,8567,8670,8753,8848,8942,9052,9142,9229,9340,9420,9506,9601,9705,9796,9894,9983,10090,10192,10292,10445,10525,10630",
                         "endColumns": "126,126,114,124,108,99,116,137,117,146,85,97,93,100,118,123,102,137,130,137,182,131,118,126,119,94,98,120,134,101,113,105,134,144,108,102,82,94,93,109,89,86,110,79,85,94,103,90,97,88,106,101,99,152,79,104,98",
                         "endOffsets": "4492,4619,4734,4859,4968,5068,5185,5323,5441,5588,5674,5772,5866,5967,6086,6210,6313,6451,6582,6720,6903,7035,7154,7281,7401,7496,7595,7716,7851,7953,8067,8173,8308,8453,8562,8665,8748,8843,8937,9047,9137,9224,9335,9415,9501,9596,9700,9791,9889,9978,10085,10187,10287,10440,10520,10625,10724"
-                    }
-                },
-                {
-                    "source": "C:\\Users\\Dell\\.gradle\\caches\\8.9\\transforms\\1bc3328b993f2fd6ef3c9e9947a594a8\\transformed\\foundation-release\\res\\values-lv\\values-lv.xml",
-                    "from": {
-                        "startLines": "2,3",
-                        "startColumns": "4,4",
-                        "startOffsets": "55,145",
-                        "endColumns": "89,89",
-                        "endOffsets": "140,230"
-                    },
-                    "to": {
-                        "startLines": "113,114",
-                        "startColumns": "4,4",
-                        "startOffsets": "11832,11922",
-                        "endColumns": "89,89",
-                        "endOffsets": "11917,12007"
                     }
                 },
                 {
@@ -72,7 +55,7 @@
                     }
                 },
                 {
-                    "source": "C:\\Users\\Dell\\.gradle\\caches\\8.9\\transforms\\35fb2b82209c40229d47e860f8a19368\\transformed\\ui-release\\res\\values-lv\\values-lv.xml",
+                    "source": "C:\\Users\\Dell\\.gradle\\caches\\8.9\\transforms\\d6e7d15aae81234dfc3d9e55294080bc\\transformed\\jetified-ui-release\\res\\values-lv\\values-lv.xml",
                     "from": {
                         "startLines": "2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19",
                         "startColumns": "4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4",
@@ -86,6 +69,23 @@
                         "startOffsets": "3720,3818,3907,4003,4106,4196,4282,10729,10822,10906,10991,11161,11234,11310,11387,11564,11642,11710",
                         "endColumns": "97,88,95,102,89,85,87,92,83,84,86,72,75,76,75,77,67,121",
                         "endOffsets": "3813,3902,3998,4101,4191,4277,4365,10817,10901,10986,11073,11229,11305,11382,11458,11637,11705,11827"
+                    }
+                },
+                {
+                    "source": "C:\\Users\\Dell\\.gradle\\caches\\8.9\\transforms\\22964bf5da072febd62cc828be4be745\\transformed\\jetified-foundation-release\\res\\values-lv\\values-lv.xml",
+                    "from": {
+                        "startLines": "2,3",
+                        "startColumns": "4,4",
+                        "startOffsets": "55,145",
+                        "endColumns": "89,89",
+                        "endOffsets": "140,230"
+                    },
+                    "to": {
+                        "startLines": "113,114",
+                        "startColumns": "4,4",
+                        "startOffsets": "11832,11922",
+                        "endColumns": "89,89",
+                        "endOffsets": "11917,12007"
                     }
                 }
             ]

@@ -4,7 +4,7 @@
             "outputFile": "com.heartmonitor.app-mergeDebugResources-2:/values-tr/values-tr.xml",
             "map": [
                 {
-                    "source": "C:\\Users\\Dell\\.gradle\\caches\\8.9\\transforms\\c52928e051c8955ca41d45bbf9d92f41\\transformed\\material3-release\\res\\values-tr\\values-tr.xml",
+                    "source": "C:\\Users\\Dell\\.gradle\\caches\\8.9\\transforms\\f22f1d37d2d69e643aa2d57cb78bb866\\transformed\\jetified-material3-release\\res\\values-tr\\values-tr.xml",
                     "from": {
                         "startLines": "2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58",
                         "startColumns": "4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4",
@@ -21,24 +21,7 @@
                     }
                 },
                 {
-                    "source": "C:\\Users\\Dell\\.gradle\\caches\\8.9\\transforms\\1bc3328b993f2fd6ef3c9e9947a594a8\\transformed\\foundation-release\\res\\values-tr\\values-tr.xml",
-                    "from": {
-                        "startLines": "2,3",
-                        "startColumns": "4,4",
-                        "startOffsets": "55,139",
-                        "endColumns": "83,86",
-                        "endOffsets": "134,221"
-                    },
-                    "to": {
-                        "startLines": "113,114",
-                        "startColumns": "4,4",
-                        "startOffsets": "11386,11470",
-                        "endColumns": "83,86",
-                        "endOffsets": "11465,11552"
-                    }
-                },
-                {
-                    "source": "C:\\Users\\Dell\\.gradle\\caches\\8.9\\transforms\\35fb2b82209c40229d47e860f8a19368\\transformed\\ui-release\\res\\values-tr\\values-tr.xml",
+                    "source": "C:\\Users\\Dell\\.gradle\\caches\\8.9\\transforms\\d6e7d15aae81234dfc3d9e55294080bc\\transformed\\jetified-ui-release\\res\\values-tr\\values-tr.xml",
                     "from": {
                         "startLines": "2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19",
                         "startColumns": "4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4",
@@ -52,6 +35,23 @@
                         "startOffsets": "3510,3603,3687,3782,3882,3966,4049,10309,10397,10481,10561,10729,10800,10874,10949,11122,11200,11268",
                         "endColumns": "92,83,94,99,83,82,99,87,83,79,87,70,73,74,71,77,67,117",
                         "endOffsets": "3598,3682,3777,3877,3961,4044,4144,10392,10476,10556,10644,10795,10869,10944,11016,11195,11263,11381"
+                    }
+                },
+                {
+                    "source": "C:\\Users\\Dell\\.gradle\\caches\\8.9\\transforms\\22964bf5da072febd62cc828be4be745\\transformed\\jetified-foundation-release\\res\\values-tr\\values-tr.xml",
+                    "from": {
+                        "startLines": "2,3",
+                        "startColumns": "4,4",
+                        "startOffsets": "55,139",
+                        "endColumns": "83,86",
+                        "endOffsets": "134,221"
+                    },
+                    "to": {
+                        "startLines": "113,114",
+                        "startColumns": "4,4",
+                        "startOffsets": "11386,11470",
+                        "endColumns": "83,86",
+                        "endOffsets": "11465,11552"
                     }
                 },
                 {

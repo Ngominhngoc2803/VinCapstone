@@ -16,7 +16,7 @@ data class WeeklySummary(
 
 data class WarningDetail(
     val recordingId: Long,
-    val bpm: Int,
+    val bpm: Float,
     val date: String,
     val severity: WarningSeverity,
     val aiSuggestion: String,

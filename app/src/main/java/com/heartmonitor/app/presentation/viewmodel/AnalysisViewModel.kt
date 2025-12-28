@@ -33,6 +33,10 @@ class AnalysisViewModel @Inject constructor(
         loadRecording()
     }
 
+
+    private var playbackJob: kotlinx.coroutines.Job? = null
+    private var totalDurationMs: Long = 0L // set this when you start playback
+
     private fun loadRecording() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
@@ -60,6 +64,58 @@ class AnalysisViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+
+    fun togglePlay() {
+        val rec = _uiState.value.recording ?: return
+
+        if (_uiState.value.isPlaying) {
+            stopPlaybackInternal()
+        } else {
+            startPlaybackInternal(rec)
+        }
+    }
+
+    private fun startPlaybackInternal(recording: HeartRecording) {
+        // ✅ Start your real audio playback here
+        // audioPlayer.play(recording.audioPath OR recording.pcmBytes ...)
+        // totalDurationMs = audioPlayer.durationMs()
+
+        // If you don't have duration from player, derive from signalData:
+        // (Assuming your signalData is 8000 Hz like ESP32)
+        val sampleRate = 8000f
+        totalDurationMs = ((recording.signalData.size / sampleRate) * 1000f).toLong()
+
+        _uiState.update { it.copy(isPlaying = true, playbackMs = 0L) }
+
+        playbackJob?.cancel()
+        playbackJob = viewModelScope.launch {
+            val start = System.currentTimeMillis()
+
+            while (_uiState.value.isPlaying) {
+                val elapsed = System.currentTimeMillis() - start
+                val clamped = elapsed.coerceAtMost(totalDurationMs)
+
+                _uiState.update { it.copy(playbackMs = clamped) }
+
+                if (clamped >= totalDurationMs) {
+                    stopPlaybackInternal()
+                    break
+                }
+
+                kotlinx.coroutines.delay(33) // ~30fps smooth cursor
+            }
+        }
+    }
+
+    private fun stopPlaybackInternal() {
+        // ✅ Stop your real audio playback here
+        // audioPlayer.stop()
+
+        playbackJob?.cancel()
+        playbackJob = null
+        _uiState.update { it.copy(isPlaying = false) }
     }
 
     fun analyzeSignal() {
@@ -179,5 +235,7 @@ data class AnalysisUiState(
     val isLoading: Boolean = false,
     val isAnalyzing: Boolean = false,
     val isChatLoading: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val isPlaying: Boolean = false,
+    val playbackMs: Long = 0L
 )

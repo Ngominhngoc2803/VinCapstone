@@ -22,7 +22,7 @@ data class HeartRecordingEntity(
     val verificationStatus: String,
     val doctorName: String? = null,
     val hospitalName: String? = null,
-    val averageBpm: Int,
+    val averageBpm: Float,
     val maxBpm: Int,
     val aiAnalysisJson: String? = null
 )

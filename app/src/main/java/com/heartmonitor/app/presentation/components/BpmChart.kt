@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -19,15 +20,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.heartmonitor.app.presentation.theme.ChartRed
 import com.heartmonitor.app.presentation.theme.ChartRedLight
+import com.heartmonitor.app.presentation.viewmodel.BpmHistoryPoint
+import java.time.format.DateTimeFormatter
+import kotlin.math.roundToInt
+import android.graphics.Paint
+import androidx.compose.ui.graphics.nativeCanvas
 import com.heartmonitor.app.presentation.viewmodel.BpmDataPoint
+import kotlin.math.ceil
 
 @Composable
 fun BpmChart(
-    dataPoints: List<BpmDataPoint>,
-    avgBpm: Int,
-    maxBpm: Int,
+    points: List<BpmHistoryPoint>,
     modifier: Modifier = Modifier
 ) {
+    val sorted = remember(points) { points.sortedBy { it.date } }
+    val avgAll = remember(sorted) {
+        if (sorted.isEmpty()) 0f else sorted.map { it.bpm }.average().toFloat()
+    }
+    val maxAll = remember(sorted) { sorted.maxOfOrNull { it.bpm }?.roundToInt() ?: 0 }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -37,15 +48,14 @@ fun BpmChart(
             )
             .padding(16.dp)
     ) {
-        // Chart
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(200.dp)
+                .height(280.dp)
         ) {
-            if (dataPoints.isNotEmpty()) {
-                BpmChartCanvas(
-                    dataPoints = dataPoints,
+            if (sorted.isNotEmpty()) {
+                BpmHistoryChartCanvas(
+                    points = sorted,
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
@@ -54,16 +64,16 @@ fun BpmChart(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "No data available",
+                        text = "No recordings yet",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
         }
-        
+
         Spacer(modifier = Modifier.height(16.dp))
-        
+
         // Stats
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -71,12 +81,12 @@ fun BpmChart(
         ) {
             Column {
                 Text(
-                    text = "Avg Heart Rate",
+                    text = "Avg BPM (all recordings)",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = "$avgBpm bpm",
+                    text = "${avgAll.roundToInt()} bpm",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
@@ -84,98 +94,123 @@ fun BpmChart(
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    text = "Max Heart Rate",
+                    text = "Max BPM (all recordings)",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = "$maxBpm bpm",
+                    text = "$maxAll bpm",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
             }
         }
+
+        // X-axis labels (first / mid / last date)
+        if (sorted.size >= 2) {
+            Spacer(modifier = Modifier.height(8.dp))
+            val fmt = remember { DateTimeFormatter.ofPattern("MM/dd") }
+            val first = sorted.first().date.format(fmt)
+            val mid = sorted[sorted.size / 2].date.format(fmt)
+            val last = sorted.last().date.format(fmt)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(first, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(mid, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(last, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
 }
 
 @Composable
-private fun BpmChartCanvas(
-    dataPoints: List<BpmDataPoint>,
+private fun BpmHistoryChartCanvas(
+    points: List<BpmHistoryPoint>,
     modifier: Modifier = Modifier
 ) {
+    val fmt = remember { DateTimeFormatter.ofPattern("MM/dd") }
+
     Canvas(modifier = modifier) {
-        if (dataPoints.isEmpty()) return@Canvas
-        
+        if (points.isEmpty()) return@Canvas
+
         val width = size.width
         val height = size.height
-        val padding = 40f
-        
-        val chartWidth = width - padding * 2
-        val chartHeight = height - padding * 2
-        
-        // Find min/max values
-        val minBpm = (dataPoints.minOfOrNull { it.bpm } ?: 60f) - 10f
-        val maxBpm = (dataPoints.maxOfOrNull { it.bpm } ?: 140f) + 10f
-        val bpmRange = maxBpm - minBpm
-        
-        val minTime = dataPoints.minOfOrNull { it.timeSeconds } ?: 0f
-        val maxTime = dataPoints.maxOfOrNull { it.timeSeconds } ?: 30f
-        val timeRange = maxTime - minTime
-        
-        // Draw horizontal grid lines
+
+        // Add extra space at bottom for x-axis labels
+        val paddingLeft = 40f
+        val paddingRight = 20f
+        val paddingTop = 20f
+        val paddingBottom = 40f   // <-- important for dates
+
+        val chartWidth = width - paddingLeft - paddingRight
+        val chartHeight = height - paddingTop - paddingBottom
+
+        // Y-range
+        val minBpm = (points.minOfOrNull { it.bpm } ?: 60f) - 10f
+        val maxBpm = (points.maxOfOrNull { it.bpm } ?: 140f) + 10f
+        val bpmRange = (maxBpm - minBpm).coerceAtLeast(1f)
+
+        // Grid lines
         val gridLineColor = Color.Gray.copy(alpha = 0.2f)
         val gridLines = 5
         for (i in 0..gridLines) {
-            val y = padding + (chartHeight * i / gridLines)
+            val y = paddingTop + (chartHeight * i / gridLines)
             drawLine(
                 color = gridLineColor,
-                start = Offset(padding, y),
-                end = Offset(width - padding, y),
+                start = Offset(paddingLeft, y),
+                end = Offset(width - paddingRight, y),
                 strokeWidth = 1f
             )
         }
-        
-        // Draw average line (dashed)
-        val avgBpm = dataPoints.map { it.bpm }.average().toFloat()
-        val avgY = padding + chartHeight * (1 - (avgBpm - minBpm) / bpmRange)
+
+        // Avg dashed line
+        val avg = points.map { it.bpm }.average().toFloat()
+        val avgY = paddingTop + chartHeight * (1f - (avg - minBpm) / bpmRange)
         drawLine(
             color = Color.Gray.copy(alpha = 0.5f),
-            start = Offset(padding, avgY),
-            end = Offset(width - padding, avgY),
+            start = Offset(paddingLeft, avgY),
+            end = Offset(width - paddingRight, avgY),
             strokeWidth = 2f,
-            pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
-                floatArrayOf(10f, 10f)
-            )
+            pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(10f, 10f))
         )
-        
-        // Create path for the chart line
+
+        // X positions (even spacing)
+        val n = points.size
+        fun xFor(i: Int): Float =
+            if (n == 1) paddingLeft + chartWidth / 2f
+            else paddingLeft + chartWidth * (i.toFloat() / (n - 1).toFloat())
+
+        fun yFor(bpm: Float): Float =
+            paddingTop + chartHeight * (1f - (bpm - minBpm) / bpmRange)
+
+        // Paths
         val linePath = Path()
         val fillPath = Path()
-        
-        dataPoints.forEachIndexed { index, point ->
-            val x = padding + chartWidth * ((point.timeSeconds - minTime) / timeRange)
-            val y = padding + chartHeight * (1 - (point.bpm - minBpm) / bpmRange)
-            
-            if (index == 0) {
+
+        points.forEachIndexed { i, p ->
+            val x = xFor(i)
+            val y = yFor(p.bpm)
+
+            if (i == 0) {
                 linePath.moveTo(x, y)
-                fillPath.moveTo(x, height - padding)
+                fillPath.moveTo(x, paddingTop + chartHeight) // bottom of chart area
                 fillPath.lineTo(x, y)
             } else {
                 linePath.lineTo(x, y)
                 fillPath.lineTo(x, y)
             }
         }
-        
-        // Complete fill path
-        val lastPoint = dataPoints.lastOrNull()
-        if (lastPoint != null) {
-            val lastX = padding + chartWidth * ((lastPoint.timeSeconds - minTime) / timeRange)
-            fillPath.lineTo(lastX, height - padding)
-            fillPath.close()
-        }
-        
-        // Draw filled area with gradient
+
+        // close fill
+        val lastX = xFor(n - 1)
+        fillPath.lineTo(lastX, paddingTop + chartHeight)
+        fillPath.close()
+
+        // Fill + line
         drawPath(
             path = fillPath,
             brush = Brush.verticalGradient(
@@ -186,106 +221,50 @@ private fun BpmChartCanvas(
             ),
             style = Fill
         )
-        
-        // Draw line
+
         drawPath(
             path = linePath,
             color = ChartRed,
             style = Stroke(width = 3f)
         )
-        
-        // Draw data points
-        dataPoints.forEach { point ->
-            val x = padding + chartWidth * ((point.timeSeconds - minTime) / timeRange)
-            val y = padding + chartHeight * (1 - (point.bpm - minBpm) / bpmRange)
-            
+
+        // dots
+        points.forEachIndexed { i, p ->
             drawCircle(
                 color = ChartRed,
                 radius = 4f,
-                center = Offset(x, y)
+                center = Offset(xFor(i), yFor(p.bpm))
             )
+        }
+
+        // ✅ X-axis date labels
+        val labelPaint = Paint().apply {
+            isAntiAlias = true
+            textSize = 28f
+            color = android.graphics.Color.GRAY
+            textAlign = Paint.Align.CENTER
+        }
+
+        // If too many points, reduce labels so it doesn't become messy
+        val maxLabels = 6
+        val step = if (n <= maxLabels) 1 else ceil(n / maxLabels.toFloat()).toInt()
+
+        val yLabel = paddingTop + chartHeight + 32f
+
+        drawContext.canvas.nativeCanvas.apply {
+            for (i in 0 until n step step) {
+                val x = xFor(i)
+                val dateText = points[i].date.format(fmt)
+                drawText(dateText, x, yLabel, labelPaint)
+            }
+
+            // always draw last label (so end date is visible)
+            if ((n - 1) % step != 0) {
+                val x = xFor(n - 1)
+                val dateText = points.last().date.format(fmt)
+                drawText(dateText, x, yLabel, labelPaint)
+            }
         }
     }
 }
 
-@Composable
-fun BpmChartWithLabels(
-    dataPoints: List<BpmDataPoint>,
-    avgBpm: Int,
-    maxBpm: Int,
-    modifier: Modifier = Modifier
-) {
-    Column(modifier = modifier) {
-        SectionHeader(
-            title = "Heart rate (BPM)",
-            showDropdown = true
-        )
-        
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(280.dp)
-        ) {
-            // Y-axis labels
-            Column(
-                modifier = Modifier
-                    .width(40.dp)
-                    .fillMaxHeight()
-                    .padding(vertical = 16.dp),
-                verticalArrangement = Arrangement.SpaceBetween
-            ) {
-                val minBpm = (dataPoints.minOfOrNull { it.bpm }?.toInt() ?: 60) - 10
-                val maxBpmVal = (dataPoints.maxOfOrNull { it.bpm }?.toInt() ?: 140) + 10
-                
-                listOf(maxBpmVal, (maxBpmVal + minBpm) / 2, minBpm).forEach { value ->
-                    Text(
-                        text = "$value",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            
-            // Chart
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(start = 44.dp)
-            ) {
-                BpmChart(
-                    dataPoints = dataPoints,
-                    avgBpm = avgBpm,
-                    maxBpm = maxBpm,
-                    modifier = Modifier.weight(1f)
-                )
-                
-                // X-axis labels
-                if (dataPoints.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        val minTime = dataPoints.minOfOrNull { it.timeSeconds }?.toInt() ?: 0
-                        val maxTime = dataPoints.maxOfOrNull { it.timeSeconds }?.toInt() ?: 30
-                        val step = (maxTime - minTime) / 5
-                        
-                        (0..5).forEach { i ->
-                            val timeValue = minTime + step * i
-                            val minutes = timeValue / 60
-                            val seconds = timeValue % 60
-                            Text(
-                                text = if (minutes > 0) "$minutes:${seconds.toString().padStart(2, '0')}" else "$seconds:00",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}

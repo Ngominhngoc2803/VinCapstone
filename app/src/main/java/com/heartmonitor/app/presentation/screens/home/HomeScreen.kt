@@ -3,7 +3,7 @@ package com.heartmonitor.app.presentation.screens.home
 import android.Manifest
 import android.bluetooth.BluetoothDevice
 import android.os.Build
-import androidx.compose.animation.*
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -26,9 +26,13 @@ import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.heartmonitor.app.bluetooth.BleConnectionState
 import com.heartmonitor.app.presentation.components.*
 import com.heartmonitor.app.presentation.theme.*
+import com.heartmonitor.app.presentation.viewmodel.BpmDataPoint
 import com.heartmonitor.app.presentation.viewmodel.HomeViewModel
 import com.heartmonitor.app.utils.DateTimeUtils
+import com.heartmonitor.app.presentation.viewmodel.BpmHistoryPoint
 
+
+@RequiresApi(Build.VERSION_CODES.S)
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
@@ -106,7 +110,69 @@ fun HomeScreen(
                 onStopRecording = { viewModel.stopRecording() }
             )
         }
-        
+
+        item {
+            if (uiState.recordings.isNotEmpty()) {
+
+                val historyPoints = uiState.recordings
+                    .sortedBy { it.timestamp }
+                    .map { rec ->
+                        BpmHistoryPoint(
+                            date = rec.timestamp.toLocalDate(),
+                            bpm = rec.averageBpm
+                        )
+                    }
+
+                Text(
+                    text = "BPM History",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(260.dp)
+                ) {
+                    // Y-axis labels
+                    Column(
+                        modifier = Modifier
+                            .width(42.dp)
+                            .fillMaxHeight()
+                            .padding(vertical = 16.dp),
+                        verticalArrangement = Arrangement.SpaceBetween,
+                        horizontalAlignment = Alignment.End
+                    ) {
+                        val minBpm = historyPoints.minOf { it.bpm }.toInt()
+                        val maxBpm = historyPoints.maxOf { it.bpm }.toInt()
+                        val midBpm = (minBpm + maxBpm) / 2
+
+                        listOf(maxBpm, midBpm, minBpm).forEach { bpm ->
+                            Text(
+                                text = "$bpm",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    // Chart
+                    BpmChart(
+                        points = historyPoints,
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .weight(1f)
+                    )
+                }
+            }
+        }
+
+
+
+
         item {
             Text(
                 text = "Recordings",
@@ -157,16 +223,7 @@ fun HomeScreen(
             }
         }
         
-        if (uiState.selectedRecording != null || uiState.displayedBpmData.isNotEmpty()) {
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                BpmChartWithLabels(
-                    dataPoints = uiState.displayedBpmData,
-                    avgBpm = uiState.selectedRecording?.averageBpm ?: 0,
-                    maxBpm = uiState.selectedRecording?.maxBpm ?: 0
-                )
-            }
-        }
+
         
         item {
             Spacer(modifier = Modifier.height(80.dp))
@@ -223,6 +280,8 @@ fun HomeScreen(
         )
     }
 }
+
+
 
 @Composable
 private fun ConnectionStatusCard(

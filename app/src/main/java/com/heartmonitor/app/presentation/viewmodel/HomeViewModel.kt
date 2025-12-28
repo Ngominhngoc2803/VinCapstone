@@ -1,6 +1,8 @@
 package com.heartmonitor.app.presentation.viewmodel
 
 import android.bluetooth.BluetoothDevice
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.heartmonitor.app.bluetooth.BleConnectionState
@@ -35,11 +37,32 @@ class HomeViewModel @Inject constructor(
 
     private var recordingJob: Job? = null
     private val signalBuffer = mutableListOf<Float>()
+
+    private val bpmBuffer = mutableListOf<Float>()
+    private var currentMaxBpmFromBle: Int = 0
+
     private var recordingStartTime: Long = 0
+
+    private var bpmJob: Job? = null
+    private var bpmSum = 0f
+    private var bpmCount = 0
+    private var bpmMax = 0f
+
+    private fun resetBpmStats() {
+        bpmSum = 0f
+        bpmCount = 0
+        bpmMax = 0f
+    }
+
+    private fun getAvgBpm(): Float {
+        return if (bpmCount == 0) 0f else bpmSum / bpmCount
+    }
 
     init {
         loadRecordings()
         observeBleSignal()
+        observeBleBpm()
+
     }
 
     private fun loadRecordings() {
@@ -63,15 +86,34 @@ class HomeViewModel @Inject constructor(
                         signalBuffer.toList()
                     }
                     
-                    val currentBpm = SignalProcessor.calculateBpm(signalBuffer)
-                    
+                    //val currentBpm = SignalProcessor.calculateBpm(signalBuffer)
+
                     _uiState.update { state ->
-                        val maxBpm = maxOf(state.currentMaxBpm, currentBpm)
                         state.copy(
                             currentSignalData = displayData,
-                            currentBpm = currentBpm,
-                            currentMaxBpm = maxBpm,
                             recordingDuration = System.currentTimeMillis() - recordingStartTime
+                        )
+                    }
+
+                }
+            }
+        }
+    }
+
+
+    private fun observeBleBpm() {
+        viewModelScope.launch {
+            bleManager.bpm.collect { bpmValue ->
+                if (_uiState.value.isRecording && bpmValue != null && bpmValue.isFinite()) {
+                    bpmBuffer.add(bpmValue)
+                    val maxNow = maxOf(currentMaxBpmFromBle, bpmValue.toInt())
+                    currentMaxBpmFromBle = maxNow
+
+                    // Update UI live (optional)
+                    _uiState.update { state ->
+                        state.copy(
+                            currentBpm = bpmValue.toInt(),
+                            currentMaxBpm = maxOf(state.currentMaxBpm, bpmValue.toInt())
                         )
                     }
                 }
@@ -79,6 +121,7 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.S)
     fun startBleScan() {
         bleManager.startScan()
     }
@@ -92,6 +135,7 @@ class HomeViewModel @Inject constructor(
         bleManager.connect(device)
     }
 
+    @RequiresApi(Build.VERSION_CODES.S)
     fun disconnect() {
         bleManager.disconnect()
     }
@@ -99,7 +143,10 @@ class HomeViewModel @Inject constructor(
     fun startRecording(name: String = "Recording") {
         signalBuffer.clear()
         recordingStartTime = System.currentTimeMillis()
-        
+        bpmBuffer.clear()
+        currentMaxBpmFromBle = 0
+
+
         _uiState.update {
             it.copy(
                 isRecording = true,
@@ -110,6 +157,29 @@ class HomeViewModel @Inject constructor(
                 recordingDuration = 0
             )
         }
+
+        resetBpmStats()
+
+        bpmJob?.cancel()
+        bpmJob = viewModelScope.launch {
+            bleManager.bpm
+                .filterNotNull()
+                .filter { it in 30f..220f } // sanity range
+                .collect { bpm ->
+
+                    bpmSum += bpm
+                    bpmCount += 1
+                    bpmMax = maxOf(bpmMax, bpm)
+
+                    _uiState.update { state ->
+                        state.copy(
+                            currentBpm = bpm.toInt(),
+                            currentMaxBpm = maxOf(state.currentMaxBpm, bpm.toInt())
+                        )
+                    }
+                }
+        }
+
 
         // If BLE is not connected, simulate data for testing
         if (bleConnectionState.value != BleConnectionState.READY) {
@@ -131,7 +201,13 @@ class HomeViewModel @Inject constructor(
                 }
                 
                 val currentBpm = SignalProcessor.calculateBpm(signalBuffer)
-                
+
+                val bpm = currentBpm.toFloat()
+                if (bpm in 30f..220f) {
+                    bpmSum += bpm
+                    bpmCount += 1
+                    bpmMax = maxOf(bpmMax, bpm)
+                }
                 _uiState.update { state ->
                     val maxBpm = maxOf(state.currentMaxBpm, currentBpm)
                     state.copy(
@@ -169,43 +245,59 @@ class HomeViewModel @Inject constructor(
 
     fun stopRecording() {
         recordingJob?.cancel()
-        
+
         viewModelScope.launch {
             val signalData = signalBuffer.toList()
-            val avgBpm = SignalProcessor.calculateBpm(signalData)
-            val maxBpm = _uiState.value.currentMaxBpm
-            
-            // Determine health status (simple classification - replace with ML model)
+
+            // ✅ Average BPM from BLE samples (preferred)
+            val avgBpmFromBle = if (bpmBuffer.isNotEmpty()) {
+                bpmBuffer.average().toFloat()
+            } else {
+                // fallback
+                SignalProcessor.calculateBpm(signalData).toFloat()
+            }
+
+            // ✅ Max BPM from BLE samples (preferred)
+            val maxBpmFromBle = if (bpmBuffer.isNotEmpty()) {
+                bpmBuffer.maxOrNull()?.toInt() ?: 0
+            } else {
+                _uiState.value.currentMaxBpm
+            }
+
             val healthStatus = when {
-                avgBpm > 120 || avgBpm < 50 -> HealthStatus.ISSUES_DETECTED
-                maxBpm > 150 -> HealthStatus.ISSUES_DETECTED
+                avgBpmFromBle > 120f || avgBpmFromBle < 50f -> HealthStatus.ISSUES_DETECTED
+                maxBpmFromBle > 150 -> HealthStatus.ISSUES_DETECTED
                 else -> HealthStatus.GOOD_HEALTH
             }
-            
-            // Create and save recording
+
             val recording = HeartRecording(
                 name = _uiState.value.currentRecordingName,
                 timestamp = LocalDateTime.now(),
                 duration = _uiState.value.recordingDuration,
                 signalData = signalData,
+                bpmSeries = bpmBuffer.toList(),       // ✅ NEW
+                sampleRateHz = 8000,                 // ✅ NEW
                 healthStatus = healthStatus,
                 verificationStatus = VerificationStatus.NOT_VERIFIED,
-                averageBpm = avgBpm,
-                maxBpm = maxBpm
+                averageBpm = avgBpmFromBle,
+                maxBpm = maxBpmFromBle
             )
-            
+
             recordingRepository.saveRecording(recording)
-            
+
             _uiState.update {
                 it.copy(
                     isRecording = false,
                     currentSignalData = emptyList()
                 )
             }
-            
+
             signalBuffer.clear()
+            bpmBuffer.clear()
+            currentMaxBpmFromBle = 0
         }
     }
+
 
     fun selectRecording(recording: HeartRecording) {
         _uiState.update {

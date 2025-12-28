@@ -3,9 +3,11 @@ package com.heartmonitor.app.presentation.components
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -14,6 +16,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import com.heartmonitor.app.presentation.theme.OrangePrimary
+import com.heartmonitor.app.presentation.theme.RedWarning
 import com.heartmonitor.app.presentation.theme.TextTertiary
 
 @Composable
@@ -26,9 +29,7 @@ fun SignalWaveform(
     playheadPosition: Float? = null
 ) {
     Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(backgroundColor)
+        modifier = Modifier.fillMaxSize()
     ) {
         Canvas(
             modifier = Modifier.fillMaxSize()
@@ -107,6 +108,14 @@ fun SignalWaveform(
                 )
             }
         }
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center) // ✅ works now
+                .width(2.dp)
+                .fillMaxHeight()
+                .background(Color.Red)
+        )
     }
 }
 

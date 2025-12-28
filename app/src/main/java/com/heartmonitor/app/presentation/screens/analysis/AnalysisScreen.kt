@@ -26,6 +26,13 @@ import com.heartmonitor.app.presentation.components.LoadingIndicator
 import com.heartmonitor.app.presentation.theme.*
 import com.heartmonitor.app.presentation.viewmodel.AnalysisViewModel
 import kotlinx.coroutines.launch
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioTrack
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -57,12 +64,14 @@ fun AnalysisScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
+                    IconButton(onClick = { viewModel.togglePlay() }) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
+                            imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = "Play/Pause",
+                            tint = OrangePrimary
                         )
                     }
+
                 },
                 actions = {
                     IconButton(onClick = { /* Export to PDF */ }) {
@@ -124,13 +133,32 @@ fun AnalysisScreen(
                                 .fillMaxSize()
                                 .padding(16.dp)
                         ) {
+                            val recording = uiState.recording
+                            val signal = recording?.signalData ?: emptyList()
+
+// ✅ assume ESP32 sample rate
+                            val sampleRate = 8000f
+
+// ✅ playhead sample index from playbackMs
+                            val playheadSample = ((uiState.playbackMs / 1000f) * sampleRate).toInt()
+                                .coerceIn(0, (signal.size - 1).coerceAtLeast(0))
+
+// ✅ show a sliding window so it feels animated
+                            val windowSamples = (sampleRate * 4f).toInt() // show ~4 seconds width like your UI
+                            val half = windowSamples / 2
+
+                            val start = (playheadSample - half).coerceAtLeast(0)
+                            val end = (start + windowSamples).coerceAtMost(signal.size)
+                            val window = if (signal.isNotEmpty() && start < end) signal.subList(start, end) else emptyList()
+
                             HeartSignalWaveform(
-                                signalData = uiState.recording?.signalData ?: emptyList(),
+                                signalData = window,
                                 modifier = Modifier.fillMaxSize(),
                                 lineColor = MaterialTheme.colorScheme.onSurface,
                                 strokeWidth = 2f
                             )
-                            
+
+
                             // Time markers
                             Row(
                                 modifier = Modifier
@@ -153,6 +181,70 @@ fun AnalysisScreen(
                             )
                         }
                     }
+                    Spacer(modifier = Modifier.height(12.dp))
+
+// ✅ BPM Summary + Playback
+                    val recording = uiState.recording
+                    var isPlaying by remember { mutableStateOf(false) }
+                    var audioTrack by remember { mutableStateOf<AudioTrack?>(null) }
+
+                    DisposableEffect(Unit) {
+                        onDispose {
+                            try { audioTrack?.stop() } catch (_: Exception) {}
+                            try { audioTrack?.release() } catch (_: Exception) {}
+                            audioTrack = null
+                        }
+                    }
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text("BPM Summary", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.height(6.dp))
+                                Text("Average: ${"%.1f".format(recording?.averageBpm ?: 0f)} BPM")
+                                Text("Max: ${recording?.maxBpm ?: 0} BPM")
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    val rec = recording ?: return@IconButton
+
+                                    coroutineScope.launch {
+                                        if (!isPlaying) {
+                                            // start
+                                            try { audioTrack?.release() } catch (_: Exception) {}
+                                            audioTrack = playWaveform(rec.signalData, rec.sampleRateHz)
+                                            isPlaying = audioTrack != null
+                                        } else {
+                                            // stop
+                                            try { audioTrack?.stop() } catch (_: Exception) {}
+                                            try { audioTrack?.release() } catch (_: Exception) {}
+                                            audioTrack = null
+                                            isPlaying = false
+                                        }
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = if (isPlaying) "Pause" else "Play",
+                                    tint = OrangePrimary,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                        }
+                    }
+
                 }
                 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -206,11 +298,13 @@ fun AnalysisScreen(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             // Heart rate status
+                            val avg = uiState.recording?.averageBpm ?: 0f
                             AnalysisResultChip(
-                                text = "Heart rate is ${analysis?.heartRateStatus ?: "normal"}! BPM ${if ((uiState.recording?.averageBpm ?: 0) > 100) "exceeds" else "is"} ${uiState.recording?.averageBpm ?: 0}!",
+                                text = "Heart rate is ${analysis?.heartRateStatus ?: "normal"}! Avg BPM ${"%.1f".format(avg)}.",
                                 isWarning = analysis?.heartRateStatus == "too fast" || analysis?.heartRateStatus == "too slow"
                             )
-                            
+
+
                             // Detected conditions
                             analysis?.detectedConditions?.forEach { condition ->
                                 AnalysisResultChip(
@@ -319,6 +413,43 @@ fun AnalysisScreen(
         }
     }
 }
+
+private suspend fun playWaveform(
+    signal: List<Float>,
+    sampleRate: Int
+): AudioTrack? = withContext(Dispatchers.Default) {
+    if (signal.isEmpty()) return@withContext null
+
+    // Convert Float samples back to PCM16.
+    // Your signalData values are approx original_int16 / 1000f.
+    // So multiply by 1000 to recover int16-ish magnitude.
+    val pcm = ShortArray(signal.size)
+    for (i in signal.indices) {
+        val v = (signal[i] * 1000f).toInt()
+        val clamped = v.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+        pcm[i] = clamped.toShort()
+    }
+
+    val track = AudioTrack(
+        AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build(),
+        AudioFormat.Builder()
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setSampleRate(sampleRate)
+            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+            .build(),
+        pcm.size * 2,
+        AudioTrack.MODE_STATIC,
+        AudioManager.AUDIO_SESSION_ID_GENERATE
+    )
+
+    track.write(pcm, 0, pcm.size)
+    track.play()
+    track
+}
+
 
 @Composable
 private fun AnalysisResultChip(

@@ -70,7 +70,7 @@ class HeartRecordingRepository @Inject constructor(
             verificationStatus = VerificationStatus.valueOf(verificationStatus),
             doctorName = doctorName,
             hospitalName = hospitalName,
-            averageBpm = averageBpm,
+            averageBpm = averageBpm.toFloat(),
             maxBpm = maxBpm,
             aiAnalysis = aiAnalysis
         )
@@ -87,7 +87,7 @@ class HeartRecordingRepository @Inject constructor(
             verificationStatus = verificationStatus.name,
             doctorName = doctorName,
             hospitalName = hospitalName,
-            averageBpm = averageBpm,
+            averageBpm = averageBpm.toFloat(),
             maxBpm = maxBpm,
             aiAnalysisJson = aiAnalysis?.let { gson.toJson(it) }
         )
@@ -188,7 +188,7 @@ class ChatRepository @Inject constructor(
         }
     }
 
-    suspend fun analyzeSignal(signalData: List<Float>, bpm: Int): Result<AiAnalysis> {
+    suspend fun analyzeSignal(signalData: List<Float>, bpm: Float): Result<AiAnalysis> {
         return try {
             val prompt = """Analyze this heart signal data:
                 - Average BPM: $bpm

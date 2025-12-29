@@ -11,12 +11,18 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import android.content.Context
+import android.net.Uri
+import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
+import java.io.FileOutputStream
 
 @HiltViewModel
 class ProfileViewModel @Inject constructor(
     private val userRepository: UserRepository,
     private val recordingRepository: HeartRecordingRepository,
-    private val chatRepository: ChatRepository
+    private val chatRepository: ChatRepository,
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ProfileUiState())
@@ -152,6 +158,36 @@ class ProfileViewModel @Inject constructor(
 
     fun refreshData() {
         loadWeeklyData()
+    }
+
+    fun updateUserAvatar(uri: Uri) {
+        viewModelScope.launch {
+            try {
+                // Copy image to app's internal storage
+                val fileName = "user_avatar_${System.currentTimeMillis()}.jpg"
+                val file = File(context.filesDir, fileName)
+
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(file).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+
+                // Delete old avatar if exists
+                _uiState.value.userProfile?.avatarUrl?.let { oldPath ->
+                    File(oldPath).delete()
+                }
+
+                // Update profile with new avatar path
+                val currentProfile = _uiState.value.userProfile
+                val updatedProfile = currentProfile?.copy(avatarUrl = file.absolutePath)
+                    ?: UserProfile(name = "User", avatarUrl = file.absolutePath)
+                userRepository.saveUserProfile(updatedProfile)
+
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = "Failed to save avatar: ${e.message}") }
+            }
+        }
     }
 }
 

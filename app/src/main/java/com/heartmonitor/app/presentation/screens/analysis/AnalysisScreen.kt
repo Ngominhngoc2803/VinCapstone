@@ -21,6 +21,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.heartmonitor.app.domain.model.ChatMessage
+import com.heartmonitor.app.presentation.components.DoctorVisitDialog
+import com.heartmonitor.app.presentation.components.DoctorVisitInfoCard
+import com.heartmonitor.app.presentation.components.DoctorVisitInput
 import com.heartmonitor.app.presentation.components.HeartSignalWaveform
 import com.heartmonitor.app.presentation.components.LoadingIndicator
 import com.heartmonitor.app.presentation.theme.*
@@ -53,6 +56,24 @@ fun AnalysisScreen(
         }
     }
 
+    // Doctor Visit Dialog
+    DoctorVisitDialog(
+        isVisible = uiState.showDoctorVisitDialog,
+        existingDoctors = uiState.existingDoctors,
+        initialData = uiState.recording?.let { rec ->
+            DoctorVisitInput(
+                doctorName = rec.doctorName ?: "",
+                clinicName = rec.hospitalName ?: "",
+                visitDate = rec.doctorVisitDate ?: java.time.LocalDate.now(),
+                doctorNote = rec.doctorNote ?: "",
+                diagnosis = rec.diagnosis ?: "",
+                recommendations = rec.recommendations ?: ""
+            )
+        } ?: DoctorVisitInput(),
+        onDismiss = { viewModel.hideDoctorVisitDialog() },
+        onSave = { input -> viewModel.saveDoctorVisit(input) }
+    )
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -64,6 +85,15 @@ fun AnalysisScreen(
                     )
                 },
                 navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = OrangePrimary
+                        )
+                    }
+                },
+                actions = {
                     IconButton(onClick = { viewModel.togglePlay() }) {
                         Icon(
                             imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -71,9 +101,6 @@ fun AnalysisScreen(
                             tint = OrangePrimary
                         )
                     }
-
-                },
-                actions = {
                     IconButton(onClick = { /* Export to PDF */ }) {
                         Icon(
                             imageVector = Icons.Default.PictureAsPdf,
@@ -115,9 +142,9 @@ fun AnalysisScreen(
                             color = OrangePrimary
                         )
                     }
-                    
+
                     Spacer(modifier = Modifier.height(16.dp))
-                    
+
                     // Waveform card
                     Card(
                         modifier = Modifier
@@ -136,15 +163,11 @@ fun AnalysisScreen(
                             val recording = uiState.recording
                             val signal = recording?.signalData ?: emptyList()
 
-// ✅ assume ESP32 sample rate
                             val sampleRate = 8000f
-
-// ✅ playhead sample index from playbackMs
                             val playheadSample = ((uiState.playbackMs / 1000f) * sampleRate).toInt()
                                 .coerceIn(0, (signal.size - 1).coerceAtLeast(0))
 
-// ✅ show a sliding window so it feels animated
-                            val windowSamples = (sampleRate * 4f).toInt() // show ~4 seconds width like your UI
+                            val windowSamples = (sampleRate * 4f).toInt()
                             val half = windowSamples / 2
 
                             val start = (playheadSample - half).coerceAtLeast(0)
@@ -158,7 +181,6 @@ fun AnalysisScreen(
                                 strokeWidth = 2f
                             )
 
-
                             // Time markers
                             Row(
                                 modifier = Modifier
@@ -170,7 +192,7 @@ fun AnalysisScreen(
                                 Text("00:02", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
                                 Text("00:04", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
                             }
-                            
+
                             // Playback indicator
                             Box(
                                 modifier = Modifier
@@ -181,9 +203,10 @@ fun AnalysisScreen(
                             )
                         }
                     }
+
                     Spacer(modifier = Modifier.height(12.dp))
 
-// ✅ BPM Summary + Playback
+                    // BPM Summary + Playback
                     val recording = uiState.recording
                     var isPlaying by remember { mutableStateOf(false) }
                     var audioTrack by remember { mutableStateOf<AudioTrack?>(null) }
@@ -221,12 +244,10 @@ fun AnalysisScreen(
 
                                     coroutineScope.launch {
                                         if (!isPlaying) {
-                                            // start
                                             try { audioTrack?.release() } catch (_: Exception) {}
                                             audioTrack = playWaveform(rec.signalData, rec.sampleRateHz)
                                             isPlaying = audioTrack != null
                                         } else {
-                                            // stop
                                             try { audioTrack?.stop() } catch (_: Exception) {}
                                             try { audioTrack?.release() } catch (_: Exception) {}
                                             audioTrack = null
@@ -245,10 +266,22 @@ fun AnalysisScreen(
                         }
                     }
 
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Doctor Visit Info Card - NEW FEATURE
+                    DoctorVisitInfoCard(
+                        doctorName = recording?.doctorName,
+                        clinicName = recording?.hospitalName,
+                        visitDate = recording?.doctorVisitDate,
+                        doctorNote = recording?.doctorNote,
+                        diagnosis = recording?.diagnosis,
+                        recommendations = recording?.recommendations,
+                        onEditClick = { viewModel.showDoctorVisitDialog() }
+                    )
                 }
-                
+
                 Spacer(modifier = Modifier.height(16.dp))
-                
+
                 // AI Analysis section
                 Column(
                     modifier = Modifier
@@ -274,7 +307,7 @@ fun AnalysisScreen(
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
-                        
+
                         if (uiState.isAnalyzing) {
                             Spacer(modifier = Modifier.width(8.dp))
                             CircularProgressIndicator(
@@ -284,28 +317,25 @@ fun AnalysisScreen(
                             )
                         }
                     }
-                    
+
                     Spacer(modifier = Modifier.height(12.dp))
-                    
+
                     // Analysis results
                     if (uiState.analysis != null || uiState.recording?.aiAnalysis != null) {
                         val analysis = uiState.analysis ?: uiState.recording?.aiAnalysis
-                        
+
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            // Heart rate status
                             val avg = uiState.recording?.averageBpm ?: 0f
                             AnalysisResultChip(
                                 text = "Heart rate is ${analysis?.heartRateStatus ?: "normal"}! Avg BPM ${"%.1f".format(avg)}.",
                                 isWarning = analysis?.heartRateStatus == "too fast" || analysis?.heartRateStatus == "too slow"
                             )
 
-
-                            // Detected conditions
                             analysis?.detectedConditions?.forEach { condition ->
                                 AnalysisResultChip(
                                     text = "${condition.probability}% of ${condition.name} detected!",
@@ -314,9 +344,9 @@ fun AnalysisScreen(
                             }
                         }
                     }
-                    
+
                     Spacer(modifier = Modifier.height(16.dp))
-                    
+
                     // Chat messages
                     LazyColumn(
                         state = listState,
@@ -329,7 +359,7 @@ fun AnalysisScreen(
                         items(uiState.chatMessages) { message ->
                             ChatMessageBubble(message = message)
                         }
-                        
+
                         if (uiState.isChatLoading) {
                             item {
                                 Row(
@@ -360,7 +390,7 @@ fun AnalysisScreen(
                         }
                     }
                 }
-                
+
                 // Chat input
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -388,9 +418,9 @@ fun AnalysisScreen(
                             ),
                             maxLines = 3
                         )
-                        
+
                         Spacer(modifier = Modifier.width(8.dp))
-                        
+
                         FloatingActionButton(
                             onClick = {
                                 if (messageText.isNotBlank()) {
@@ -420,9 +450,6 @@ private suspend fun playWaveform(
 ): AudioTrack? = withContext(Dispatchers.Default) {
     if (signal.isEmpty()) return@withContext null
 
-    // Convert Float samples back to PCM16.
-    // Your signalData values are approx original_int16 / 1000f.
-    // So multiply by 1000 to recover int16-ish magnitude.
     val pcm = ShortArray(signal.size)
     for (i in signal.indices) {
         val v = (signal[i] * 1000f).toInt()
@@ -498,7 +525,7 @@ private fun ChatMessageBubble(message: ChatMessage) {
             }
             Spacer(modifier = Modifier.width(8.dp))
         }
-        
+
         Card(
             modifier = Modifier.widthIn(max = 280.dp),
             shape = RoundedCornerShape(
@@ -508,9 +535,9 @@ private fun ChatMessageBubble(message: ChatMessage) {
                 bottomEnd = 16.dp
             ),
             colors = CardDefaults.cardColors(
-                containerColor = if (message.isFromUser) 
-                    OrangePrimary 
-                else 
+                containerColor = if (message.isFromUser)
+                    OrangePrimary
+                else
                     MaterialTheme.colorScheme.surfaceVariant
             )
         ) {
@@ -521,7 +548,7 @@ private fun ChatMessageBubble(message: ChatMessage) {
                 modifier = Modifier.padding(12.dp)
             )
         }
-        
+
         if (message.isFromUser) {
             Spacer(modifier = Modifier.width(8.dp))
             Box(

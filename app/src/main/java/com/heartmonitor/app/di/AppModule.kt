@@ -28,7 +28,9 @@ object AppModule {
             context,
             HeartMonitorDatabase::class.java,
             "heart_monitor_db"
-        ).build()
+        )
+            .addMigrations(HeartMonitorDatabase.MIGRATION_1_2)
+            .build()
     }
 
     @Provides
@@ -55,7 +57,7 @@ object AppModule {
         val loggingInterceptor = HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BODY
         }
-        
+
         return OkHttpClient.Builder()
             .addInterceptor(loggingInterceptor)
             .connectTimeout(30, TimeUnit.SECONDS)

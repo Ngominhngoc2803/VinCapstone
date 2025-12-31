@@ -5,15 +5,20 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.heartmonitor.app.data.repository.ChatRepository
 import com.heartmonitor.app.data.repository.HeartRecordingRepository
+import com.heartmonitor.app.data.repository.UserRepository
 import com.heartmonitor.app.domain.model.AiAnalysis
 import com.heartmonitor.app.domain.model.ChatMessage
+import com.heartmonitor.app.domain.model.DoctorInfo
 import com.heartmonitor.app.domain.model.HeartRecording
+import com.heartmonitor.app.domain.model.VerificationStatus
+import com.heartmonitor.app.presentation.components.DoctorVisitInput
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 import java.util.UUID
 import javax.inject.Inject
 
@@ -21,6 +26,7 @@ import javax.inject.Inject
 class AnalysisViewModel @Inject constructor(
     private val recordingRepository: HeartRecordingRepository,
     private val chatRepository: ChatRepository,
+    private val userRepository: UserRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -31,18 +37,18 @@ class AnalysisViewModel @Inject constructor(
 
     init {
         loadRecording()
+        loadDoctors()
     }
 
-
     private var playbackJob: kotlinx.coroutines.Job? = null
-    private var totalDurationMs: Long = 0L // set this when you start playback
+    private var totalDurationMs: Long = 0L
 
     private fun loadRecording() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
-            
+
             val recording = recordingRepository.getRecordingById(recordingId)
-            
+
             if (recording != null) {
                 _uiState.update {
                     it.copy(
@@ -50,7 +56,7 @@ class AnalysisViewModel @Inject constructor(
                         isLoading = false
                     )
                 }
-                
+
                 // Auto-analyze if no analysis exists
                 if (recording.aiAnalysis == null) {
                     analyzeSignal()
@@ -66,6 +72,13 @@ class AnalysisViewModel @Inject constructor(
         }
     }
 
+    private fun loadDoctors() {
+        viewModelScope.launch {
+            userRepository.getAllDoctors().collect { doctors ->
+                _uiState.update { it.copy(existingDoctors = doctors) }
+            }
+        }
+    }
 
     fun togglePlay() {
         val rec = _uiState.value.recording ?: return
@@ -78,12 +91,6 @@ class AnalysisViewModel @Inject constructor(
     }
 
     private fun startPlaybackInternal(recording: HeartRecording) {
-        // ✅ Start your real audio playback here
-        // audioPlayer.play(recording.audioPath OR recording.pcmBytes ...)
-        // totalDurationMs = audioPlayer.durationMs()
-
-        // If you don't have duration from player, derive from signalData:
-        // (Assuming your signalData is 8000 Hz like ESP32)
         val sampleRate = 8000f
         totalDurationMs = ((recording.signalData.size / sampleRate) * 1000f).toLong()
 
@@ -104,15 +111,12 @@ class AnalysisViewModel @Inject constructor(
                     break
                 }
 
-                kotlinx.coroutines.delay(33) // ~30fps smooth cursor
+                kotlinx.coroutines.delay(33)
             }
         }
     }
 
     private fun stopPlaybackInternal() {
-        // ✅ Stop your real audio playback here
-        // audioPlayer.stop()
-
         playbackJob?.cancel()
         playbackJob = null
         _uiState.update { it.copy(isPlaying = false) }
@@ -120,15 +124,15 @@ class AnalysisViewModel @Inject constructor(
 
     fun analyzeSignal() {
         val recording = _uiState.value.recording ?: return
-        
+
         viewModelScope.launch {
             _uiState.update { it.copy(isAnalyzing = true) }
-            
+
             val result = chatRepository.analyzeSignal(
                 signalData = recording.signalData,
                 bpm = recording.averageBpm
             )
-            
+
             result.fold(
                 onSuccess = { analysis ->
                     _uiState.update {
@@ -137,7 +141,7 @@ class AnalysisViewModel @Inject constructor(
                             isAnalyzing = false
                         )
                     }
-                    
+
                     // Update recording with analysis
                     val updatedRecording = recording.copy(aiAnalysis = analysis)
                     recordingRepository.updateRecording(updatedRecording)
@@ -154,24 +158,72 @@ class AnalysisViewModel @Inject constructor(
         }
     }
 
+    fun showDoctorVisitDialog() {
+        _uiState.update { it.copy(showDoctorVisitDialog = true) }
+    }
+
+    fun hideDoctorVisitDialog() {
+        _uiState.update { it.copy(showDoctorVisitDialog = false) }
+    }
+
+    fun saveDoctorVisit(input: DoctorVisitInput) {
+        val recording = _uiState.value.recording ?: return
+
+        viewModelScope.launch {
+            val updatedRecording = recording.copy(
+                doctorName = input.doctorName,
+                hospitalName = input.clinicName,
+                doctorVisitDate = input.visitDate,
+                doctorNote = input.doctorNote.ifBlank { null },
+                diagnosis = input.diagnosis.ifBlank { null },
+                recommendations = input.recommendations.ifBlank { null },
+                verificationStatus = VerificationStatus.CLINIC_VERIFIED
+            )
+
+            recordingRepository.updateRecording(updatedRecording)
+
+            _uiState.update {
+                it.copy(
+                    recording = updatedRecording,
+                    showDoctorVisitDialog = false
+                )
+            }
+
+            // Also save the doctor to the doctors list if new
+            val existingDoctor = _uiState.value.existingDoctors.find {
+                it.name.equals(input.doctorName, ignoreCase = true)
+            }
+            if (existingDoctor == null && input.doctorName.isNotBlank()) {
+                userRepository.saveDoctor(
+                    DoctorInfo(
+                        name = input.doctorName,
+                        address = input.clinicName,
+                        phone = "",
+                        email = ""
+                    )
+                )
+            }
+        }
+    }
+
     fun sendChatMessage(message: String) {
         if (message.isBlank()) return
-        
+
         val recording = _uiState.value.recording ?: return
-        
+
         val userMessage = ChatMessage(
             id = UUID.randomUUID().toString(),
             content = message,
             isFromUser = true
         )
-        
+
         _uiState.update {
             it.copy(
                 chatMessages = it.chatMessages + userMessage,
                 isChatLoading = true
             )
         }
-        
+
         viewModelScope.launch {
             val signalContext = """
                 Recording: ${recording.name}
@@ -179,17 +231,20 @@ class AnalysisViewModel @Inject constructor(
                 Max BPM: ${recording.maxBpm}
                 Health Status: ${recording.healthStatus}
                 Duration: ${recording.duration / 1000} seconds
-                ${recording.aiAnalysis?.let { 
-                    "Previous Analysis: Heart rate is ${it.heartRateStatus}. " +
-                    "Detected conditions: ${it.detectedConditions.joinToString { c -> "${c.name} (${c.probability}%)" }}"
-                } ?: ""}
+                ${recording.doctorName?.let { "Verified by: $it at ${recording.hospitalName}" } ?: "Not yet verified by a doctor"}
+                ${recording.diagnosis?.let { "Diagnosis: $it" } ?: ""}
+                ${recording.doctorNote?.let { "Doctor's Note: $it" } ?: ""}
+                ${recording.aiAnalysis?.let {
+                "AI Analysis: Heart rate is ${it.heartRateStatus}. " +
+                        "Detected conditions: ${it.detectedConditions.joinToString { c -> "${c.name} (${c.probability}%)" }}"
+            } ?: ""}
             """.trimIndent()
-            
+
             val result = chatRepository.sendMessage(
                 messages = _uiState.value.chatMessages,
                 signalContext = signalContext
             )
-            
+
             result.fold(
                 onSuccess = { response ->
                     val assistantMessage = ChatMessage(
@@ -197,7 +252,7 @@ class AnalysisViewModel @Inject constructor(
                         content = response,
                         isFromUser = false
                     )
-                    
+
                     _uiState.update {
                         it.copy(
                             chatMessages = it.chatMessages + assistantMessage,
@@ -211,7 +266,7 @@ class AnalysisViewModel @Inject constructor(
                         content = "Sorry, I couldn't process your request. Please try again.",
                         isFromUser = false
                     )
-                    
+
                     _uiState.update {
                         it.copy(
                             chatMessages = it.chatMessages + errorMessage,
@@ -232,10 +287,12 @@ data class AnalysisUiState(
     val recording: HeartRecording? = null,
     val analysis: AiAnalysis? = null,
     val chatMessages: List<ChatMessage> = emptyList(),
+    val existingDoctors: List<DoctorInfo> = emptyList(),
     val isLoading: Boolean = false,
     val isAnalyzing: Boolean = false,
     val isChatLoading: Boolean = false,
     val error: String? = null,
     val isPlaying: Boolean = false,
-    val playbackMs: Long = 0L
+    val playbackMs: Long = 0L,
+    val showDoctorVisitDialog: Boolean = false
 )

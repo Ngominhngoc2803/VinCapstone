@@ -6,6 +6,7 @@ import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 
@@ -24,7 +25,12 @@ data class HeartRecordingEntity(
     val hospitalName: String? = null,
     val averageBpm: Float,
     val maxBpm: Int,
-    val aiAnalysisJson: String? = null
+    val aiAnalysisJson: String? = null,
+    // New fields for doctor visit
+    val doctorVisitDate: LocalDate? = null,
+    val doctorNote: String? = null,
+    val diagnosis: String? = null,
+    val recommendations: String? = null
 )
 
 @Entity(tableName = "user_profile")
@@ -57,6 +63,16 @@ class Converters {
     @TypeConverter
     fun dateToTimestamp(date: LocalDateTime?): Long? {
         return date?.toEpochSecond(ZoneOffset.UTC)
+    }
+
+    @TypeConverter
+    fun fromLocalDate(value: Long?): LocalDate? {
+        return value?.let { LocalDate.ofEpochDay(it) }
+    }
+
+    @TypeConverter
+    fun localDateToLong(date: LocalDate?): Long? {
+        return date?.toEpochDay()
     }
 
     @TypeConverter

@@ -24,6 +24,15 @@ import com.heartmonitor.app.domain.model.WarningSeverity
 import com.heartmonitor.app.presentation.components.SectionHeader
 import com.heartmonitor.app.presentation.theme.*
 import com.heartmonitor.app.presentation.viewmodel.ProfileViewModel
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import androidx.compose.ui.platform.LocalContext
+import java.io.File
+import androidx.compose.ui.layout.ContentScale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,6 +41,14 @@ fun ProfileScreen(
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+
+    // Image picker launcher
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.updateUserAvatar(it) }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -49,30 +66,73 @@ fun ProfileScreen(
                 color = MaterialTheme.colorScheme.onBackground
             )
         }
-        
+
         // User avatar and name
         item {
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // Clickable Avatar with camera overlay
                 Box(
                     modifier = Modifier
                         .size(100.dp)
                         .clip(CircleShape)
-                        .background(OrangeLight),
+                        .clickable { imagePickerLauncher.launch("image/*") },
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Person,
-                        contentDescription = null,
-                        modifier = Modifier.size(60.dp),
-                        tint = Color.White
-                    )
+                    val avatarPath = uiState.userProfile?.avatarUrl
+
+                    if (avatarPath != null && File(avatarPath).exists()) {
+                        // Show user's uploaded avatar
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(File(avatarPath))
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = "User Avatar",
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        // Default avatar placeholder
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(OrangeLight),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = null,
+                                modifier = Modifier.size(60.dp),
+                                tint = Color.White
+                            )
+                        }
+                    }
+
+                    // Camera icon overlay
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(OrangePrimary),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CameraAlt,
+                            contentDescription = "Change Avatar",
+                            modifier = Modifier.size(18.dp),
+                            tint = Color.White
+                        )
+                    }
                 }
-                
+
                 Spacer(modifier = Modifier.height(12.dp))
-                
+
                 Text(
                     text = uiState.userProfile?.name ?: "User",
                     style = MaterialTheme.typography.headlineSmall,
@@ -80,7 +140,7 @@ fun ProfileScreen(
                 )
             }
         }
-        
+
         // Heart Health Tracking Section
         item {
             SectionHeader(
@@ -88,7 +148,7 @@ fun ProfileScreen(
                 showDropdown = false
             )
         }
-        
+
         // AI detected problems header
         item {
             Text(
@@ -97,7 +157,7 @@ fun ProfileScreen(
                 fontWeight = FontWeight.Bold
             )
         }
-        
+
         // AI Summary card
         item {
             Card(
@@ -124,11 +184,11 @@ fun ProfileScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                     }
-                    
+
                     Spacer(modifier = Modifier.height(8.dp))
-                    
+
                     Text(
-                        text = uiState.weeklySummary?.aiSummary 
+                        text = uiState.weeklySummary?.aiSummary
                             ?: "No issues detected this week. Keep up the good work!",
                         style = MaterialTheme.typography.bodyMedium,
                         fontStyle = FontStyle.Italic,
@@ -137,7 +197,7 @@ fun ProfileScreen(
                 }
             }
         }
-        
+
         // Warning details
         if (uiState.warningDetails.isNotEmpty()) {
             items(uiState.warningDetails) { warning ->
@@ -177,7 +237,7 @@ fun ProfileScreen(
                 }
             }
         }
-        
+
         // Doctors section
         item {
             Spacer(modifier = Modifier.height(8.dp))
@@ -186,11 +246,11 @@ fun ProfileScreen(
                 showDropdown = false
             )
         }
-        
+
         items(uiState.doctors) { doctor ->
             DoctorCard(doctor = doctor)
         }
-        
+
         // Bottom spacing
         item {
             Spacer(modifier = Modifier.height(80.dp))
@@ -234,15 +294,15 @@ private fun WarningDetailCard(
                         color = OrangePrimary
                     )
                 }
-                
+
                 Text(
                     text = "See recording",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary
                 )
-                
+
                 Spacer(modifier = Modifier.height(8.dp))
-                
+
                 // Severity stars
                 Row {
                     repeat(3) { index ->
@@ -258,9 +318,9 @@ private fun WarningDetailCard(
                         )
                     }
                 }
-                
+
                 Spacer(modifier = Modifier.height(8.dp))
-                
+
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.AutoAwesome,
@@ -275,14 +335,14 @@ private fun WarningDetailCard(
                         fontWeight = FontWeight.Medium
                     )
                 }
-                
+
                 Text(
                     text = warning.aiSuggestion,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            
+
             // Right section - Note
             Column(
                 modifier = Modifier.width(100.dp),
@@ -293,7 +353,7 @@ private fun WarningDetailCard(
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold
                 )
-                
+
                 Text(
                     text = warning.note ?: "go to Dr.ABC to check...",
                     style = MaterialTheme.typography.bodySmall,
@@ -334,9 +394,9 @@ private fun DoctorCard(doctor: DoctorInfo) {
                     modifier = Modifier.size(32.dp)
                 )
             }
-            
+
             Spacer(modifier = Modifier.width(12.dp))
-            
+
             // Doctor info
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -344,7 +404,7 @@ private fun DoctorCard(doctor: DoctorInfo) {
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
-                
+
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.LocationOn,
@@ -359,7 +419,7 @@ private fun DoctorCard(doctor: DoctorInfo) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                
+
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.Phone,
@@ -373,9 +433,9 @@ private fun DoctorCard(doctor: DoctorInfo) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    
+
                     Spacer(modifier = Modifier.width(12.dp))
-                    
+
                     Icon(
                         imageVector = Icons.Default.Email,
                         contentDescription = null,
@@ -390,7 +450,7 @@ private fun DoctorCard(doctor: DoctorInfo) {
                     )
                 }
             }
-            
+
             // See history link
             TextButton(onClick = { /* Navigate to history */ }) {
                 Text(

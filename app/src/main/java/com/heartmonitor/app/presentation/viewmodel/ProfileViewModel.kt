@@ -11,12 +11,18 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import android.content.Context
+import android.net.Uri
+import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
+import java.io.FileOutputStream
 
 @HiltViewModel
 class ProfileViewModel @Inject constructor(
     private val userRepository: UserRepository,
     private val recordingRepository: HeartRecordingRepository,
-    private val chatRepository: ChatRepository
+    private val chatRepository: ChatRepository,
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ProfileUiState())
@@ -46,7 +52,7 @@ class ProfileViewModel @Inject constructor(
     private fun loadWeeklyData() {
         viewModelScope.launch {
             val startOfWeek = DateTimeUtils.getStartOfWeek()
-            
+
             recordingRepository.getWarningsAfterDate(startOfWeek).collect { warnings ->
                 val warningDetails = warnings.map { recording ->
                     WarningDetail(
@@ -63,14 +69,14 @@ class ProfileViewModel @Inject constructor(
                         note = null
                     )
                 }
-                
+
                 val warningDates = warnings.map { DateTimeUtils.formatDate(it.timestamp) }.distinct()
-                val detectedConditions = warnings.flatMap { 
+                val detectedConditions = warnings.flatMap {
                     it.aiAnalysis?.detectedConditions?.map { c -> c.name } ?: emptyList()
                 }.distinct()
-                
+
                 val aiSummary = generateAiSummary(warnings, warningDates, detectedConditions)
-                
+
                 val weeklySummary = WeeklySummary(
                     totalRecordings = warnings.size,
                     warningCount = warnings.size,
@@ -78,7 +84,7 @@ class ProfileViewModel @Inject constructor(
                     detectedConditions = detectedConditions,
                     aiSummary = aiSummary
                 )
-                
+
                 _uiState.update {
                     it.copy(
                         weeklySummary = weeklySummary,
@@ -97,13 +103,13 @@ class ProfileViewModel @Inject constructor(
         if (warnings.isEmpty()) {
             return "Great news! No heart health issues detected this week. Keep maintaining your healthy lifestyle!"
         }
-        
+
         val conditionsText = if (conditions.isNotEmpty()) {
             "high risks of ${conditions.joinToString(", ")}"
         } else {
             "potential heart irregularities"
         }
-        
+
         return "This week, we detected that you have $conditionsText " +
                 "due to repeated data ${warnings.size} times on dates ${warningDates.joinToString(", and ")}..."
     }
@@ -113,7 +119,7 @@ class ProfileViewModel @Inject constructor(
             userRepository.getAllDoctors().collect { doctors ->
                 _uiState.update { it.copy(doctors = doctors) }
             }
-            
+
             // Add sample doctors if none exist
             if (_uiState.value.doctors.isEmpty()) {
                 addSampleDoctors()
@@ -136,7 +142,7 @@ class ProfileViewModel @Inject constructor(
                 email = "sjohnson@hospital.com"
             )
         )
-        
+
         sampleDoctors.forEach { doctor ->
             userRepository.saveDoctor(doctor)
         }
@@ -152,6 +158,36 @@ class ProfileViewModel @Inject constructor(
 
     fun refreshData() {
         loadWeeklyData()
+    }
+
+    fun updateUserAvatar(uri: Uri) {
+        viewModelScope.launch {
+            try {
+                // Copy image to app's internal storage
+                val fileName = "user_avatar_${System.currentTimeMillis()}.jpg"
+                val file = File(context.filesDir, fileName)
+
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(file).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+
+                // Delete old avatar if exists
+                _uiState.value.userProfile?.avatarUrl?.let { oldPath ->
+                    File(oldPath).delete()
+                }
+
+                // Update profile with new avatar path
+                val currentProfile = _uiState.value.userProfile
+                val updatedProfile = currentProfile?.copy(avatarUrl = file.absolutePath)
+                    ?: UserProfile(name = "User", avatarUrl = file.absolutePath)
+                userRepository.saveUserProfile(updatedProfile)
+
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = "Failed to save avatar: ${e.message}") }
+            }
+        }
     }
 }
 

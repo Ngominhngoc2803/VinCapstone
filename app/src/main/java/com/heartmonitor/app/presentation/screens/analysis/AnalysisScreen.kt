@@ -21,17 +21,99 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.heartmonitor.app.domain.model.ChatMessage
+import com.heartmonitor.app.presentation.components.DoctorVisitDialog
+import com.heartmonitor.app.presentation.components.DoctorVisitInfoCard
+import com.heartmonitor.app.presentation.components.DoctorVisitInput
 import com.heartmonitor.app.presentation.components.HeartSignalWaveform
 import com.heartmonitor.app.presentation.components.LoadingIndicator
 import com.heartmonitor.app.presentation.theme.*
 import com.heartmonitor.app.presentation.viewmodel.AnalysisViewModel
 import kotlinx.coroutines.launch
+
+import android.media.MediaPlayer
+
+import android.net.Uri
+import android.util.Log
+import java.io.File
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.content.ContentValues
+import android.os.Environment
+import android.provider.MediaStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.FileInputStream
+import android.os.SystemClock
+import androidx.compose.ui.graphics.vector.ImageVector
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+
+import java.io.BufferedInputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
+private fun playPcmFileFromPath(
+    path: String,
+    sampleRate: Int
+): Pair<AudioTrack?, Long> {
+    val f = File(path)
+    if (!f.exists() || f.length() <= 0) {
+        Log.e("PCM_PLAY", "File missing/empty: $path")
+        return null to 0L
+    }
+
+    // Read bytes (PCM16 little-endian)
+    val bytes = try {
+        BufferedInputStream(FileInputStream(f)).use { it.readBytes() }
+    } catch (e: Exception) {
+        Log.e("PCM_PLAY", "Read error", e)
+        return null to 0L
+    }
+
+    // Must be even number of bytes for PCM16
+    val safeLen = bytes.size - (bytes.size % 2)
+    if (safeLen <= 0) {
+        Log.e("PCM_PLAY", "Invalid PCM byte length=${bytes.size}")
+        return null to 0L
+    }
+
+    // Convert to ShortArray (LITTLE ENDIAN)
+    val shorts = ShortArray(safeLen / 2)
+    val bb = ByteBuffer.wrap(bytes, 0, safeLen).order(ByteOrder.LITTLE_ENDIAN)
+    for (i in shorts.indices) {
+        shorts[i] = bb.short
+    }
+
+    val durationMs = (shorts.size * 1000L) / sampleRate
+
+    val track = try {
+        AudioTrack(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build(),
+            AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(sampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build(),
+            shorts.size * 2,
+            AudioTrack.MODE_STATIC,
+            AudioManager.AUDIO_SESSION_ID_GENERATE
+        ).apply {
+            write(shorts, 0, shorts.size)
+            play()
+        }
+    } catch (e: Exception) {
+        Log.e("PCM_PLAY", "AudioTrack error", e)
+        return null to 0L
+    }
+
+    Log.e("PCM_PLAY", "Playing PCM file. bytes=${bytes.size} samples=${shorts.size} durationMs=$durationMs")
+    return track to durationMs
+}
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -44,6 +126,16 @@ fun AnalysisScreen(
     var messageText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // --- Playback states (KEEP ONLY ONE COPY) ---
+    var pcmTrack by remember { mutableStateOf<AudioTrack?>(null) }
+    var isPlayingPcm by remember { mutableStateOf(false) }
+
+    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+    var isPlayingWav by remember { mutableStateOf(false) }
+    var pcmDurationMs by remember { mutableStateOf(0L) }
+    var pcmStartUptime by remember { mutableStateOf(0L) }
+    var wavPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
 
     LaunchedEffect(uiState.chatMessages.size) {
         if (uiState.chatMessages.isNotEmpty()) {
@@ -52,6 +144,24 @@ fun AnalysisScreen(
             }
         }
     }
+
+    // Doctor Visit Dialog
+    DoctorVisitDialog(
+        isVisible = uiState.showDoctorVisitDialog,
+        existingDoctors = uiState.existingDoctors,
+        initialData = uiState.recording?.let { rec ->
+            DoctorVisitInput(
+                doctorName = rec.doctorName ?: "",
+                clinicName = rec.hospitalName ?: "",
+                visitDate = rec.doctorVisitDate ?: java.time.LocalDate.now(),
+                doctorNote = rec.doctorNote ?: "",
+                diagnosis = rec.diagnosis ?: "",
+                recommendations = rec.recommendations ?: ""
+            )
+        } ?: DoctorVisitInput(),
+        onDismiss = { viewModel.hideDoctorVisitDialog() },
+        onSave = { input -> viewModel.saveDoctorVisit(input) }
+    )
 
     Scaffold(
         topBar = {
@@ -64,16 +174,16 @@ fun AnalysisScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = { viewModel.togglePlay() }) {
+                    IconButton(onClick = onNavigateBack) {
                         Icon(
-                            imageVector = if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = "Play/Pause",
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
                             tint = OrangePrimary
                         )
                     }
-
                 },
                 actions = {
+
                     IconButton(onClick = { /* Export to PDF */ }) {
                         Icon(
                             imageVector = Icons.Default.PictureAsPdf,
@@ -115,9 +225,9 @@ fun AnalysisScreen(
                             color = OrangePrimary
                         )
                     }
-                    
+
                     Spacer(modifier = Modifier.height(16.dp))
-                    
+
                     // Waveform card
                     Card(
                         modifier = Modifier
@@ -133,18 +243,45 @@ fun AnalysisScreen(
                                 .fillMaxSize()
                                 .padding(16.dp)
                         ) {
-                            val recording = uiState.recording
-                            val signal = recording?.signalData ?: emptyList()
+                            val rec = uiState.recording
 
-// ✅ assume ESP32 sample rate
-                            val sampleRate = 8000f
+                            // 1) Prefer PCM waveform if available
+                            var pcmSignal by remember(rec?.pcmFilePath) { mutableStateOf<List<Float>?>(null) }
+                            var pcmLoadError by remember(rec?.pcmFilePath) { mutableStateOf<String?>(null) }
 
-// ✅ playhead sample index from playbackMs
-                            val playheadSample = ((uiState.playbackMs / 1000f) * sampleRate).toInt()
+                            LaunchedEffect(rec?.pcmFilePath) {
+                                pcmSignal = null
+                                pcmLoadError = null
+
+                                val path = rec?.pcmFilePath
+                                if (!path.isNullOrBlank()) {
+                                    try {
+                                        pcmSignal = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                            readPcm16LeAsFloat(path)  // [-1..1]
+                                        }
+                                    } catch (e: Exception) {
+                                        pcmLoadError = e.message
+                                        pcmSignal = null
+                                    }
+                                }
+                            }
+
+                            // 2) Choose signal source
+                            val fallbackSignal = rec?.signalData ?: emptyList()
+                            val signal: List<Float> = pcmSignal ?: fallbackSignal
+
+                            // 3) Choose sample rate (PCM uses audioSampleRate if you have it; else sampleRateHz)
+                            val sampleRateHz = (rec?.audioSampleRate ?: rec?.sampleRateHz ?: 8000).toFloat()
+
+                            val totalMs = if (signal.isNotEmpty()) ((signal.size / sampleRateHz) * 1000f).toLong() else 0L
+                            val currentMs = uiState.playbackMs.coerceIn(0L, totalMs)
+
+                            // 4) Windowing around playhead
+                            val playheadSample = ((currentMs / 1000f) * sampleRateHz).toInt()
                                 .coerceIn(0, (signal.size - 1).coerceAtLeast(0))
 
-// ✅ show a sliding window so it feels animated
-                            val windowSamples = (sampleRate * 4f).toInt() // show ~4 seconds width like your UI
+                            val windowSec = 4f
+                            val windowSamples = (sampleRateHz * windowSec).toInt().coerceAtLeast(1)
                             val half = windowSamples / 2
 
                             val start = (playheadSample - half).coerceAtLeast(0)
@@ -158,20 +295,31 @@ fun AnalysisScreen(
                                 strokeWidth = 2f
                             )
 
+                            // Bottom-right time text
+                            Text(
+                                text = "${formatMs(currentMs)} / ${formatMs(totalMs)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary,
+                                modifier = Modifier.align(Alignment.BottomEnd)
+                            )
 
-                            // Time markers
+                            // 5) Dynamic time markers that match the current window
+                            val leftMs = ((currentMs - (windowSec * 1000f / 2f).toLong()).coerceAtLeast(0L))
+                            val midMs = (leftMs + (windowSec * 1000f / 2f).toLong()).coerceAtMost(totalMs)
+                            val rightMs = (leftMs + (windowSec * 1000f).toLong()).coerceAtMost(totalMs)
+
                             Row(
                                 modifier = Modifier
                                     .align(Alignment.TopCenter)
                                     .fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("00:00", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-                                Text("00:02", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-                                Text("00:04", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                                Text(formatMs(leftMs), style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                                Text(formatMs(midMs), style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                                Text(formatMs(rightMs), style = MaterialTheme.typography.labelSmall, color = TextSecondary)
                             }
-                            
-                            // Playback indicator
+
+                            // Playback indicator (center line)
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.Center)
@@ -179,22 +327,76 @@ fun AnalysisScreen(
                                     .fillMaxHeight()
                                     .background(RedWarning)
                             )
+
+                            // Optional: show a tiny debug hint if PCM failed (remove later)
+                            if (pcmSignal == null && !rec?.pcmFilePath.isNullOrBlank() && pcmLoadError != null) {
+                                Text(
+                                    text = "PCM load failed",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = RedWarning,
+                                    modifier = Modifier.align(Alignment.BottomStart)
+                                )
+                            }
                         }
                     }
+
+
                     Spacer(modifier = Modifier.height(12.dp))
 
-// ✅ BPM Summary + Playback
+                    // BPM Summary + Playback (WAV file via MediaPlayer)
                     val recording = uiState.recording
-                    var isPlaying by remember { mutableStateOf(false) }
-                    var audioTrack by remember { mutableStateOf<AudioTrack?>(null) }
 
-                    DisposableEffect(Unit) {
-                        onDispose {
-                            try { audioTrack?.stop() } catch (_: Exception) {}
-                            try { audioTrack?.release() } catch (_: Exception) {}
-                            audioTrack = null
+
+
+                    LaunchedEffect(isPlayingWav, wavPlayer) {
+                        while (isPlayingWav && wavPlayer != null) {
+                            viewModel.setPlaybackMs(wavPlayer?.currentPosition?.toLong() ?: 0L)
+                            delay(33)
                         }
                     }
+
+
+                    // PCM -> simulate playhead since AudioTrack MODE_STATIC has no position callback
+                    LaunchedEffect(isPlayingPcm, pcmDurationMs, pcmStartUptime) {
+                        while (isPlayingPcm) {
+                            val elapsed = SystemClock.uptimeMillis() - pcmStartUptime
+                            val clamped = elapsed.coerceIn(0L, pcmDurationMs)
+                            viewModel.setPlaybackMs(clamped)
+
+                            if (elapsed >= pcmDurationMs) {
+                                // auto-stop
+                                try { pcmTrack?.stop() } catch (_: Exception) {}
+                                try { pcmTrack?.release() } catch (_: Exception) {}
+                                pcmTrack = null
+                                isPlayingPcm = false
+                                viewModel.setPlaybackMs(0L)
+                                break
+                            }
+                            delay(33)
+                        }
+                    }
+
+
+
+                    // Cleanup when user switches recordings
+                    DisposableEffect(recording?.id) {
+                        onDispose {
+                            try { pcmTrack?.stop() } catch (_: Exception) {}
+                            try { pcmTrack?.release() } catch (_: Exception) {}
+                            pcmTrack = null
+                            isPlayingPcm = false
+
+                            try { wavPlayer?.stop() } catch (_: Exception) {}
+                            try { wavPlayer?.release() } catch (_: Exception) {}
+                            wavPlayer = null
+                            isPlayingWav = false
+
+                            viewModel.setPlaybackMs(0L)
+                        }
+                    }
+
+
+
 
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -215,40 +417,217 @@ fun AnalysisScreen(
                                 Text("Max: ${recording?.maxBpm ?: 0} BPM")
                             }
 
-                            IconButton(
-                                onClick = {
-                                    val rec = recording ?: return@IconButton
 
-                                    coroutineScope.launch {
-                                        if (!isPlaying) {
-                                            // start
-                                            try { audioTrack?.release() } catch (_: Exception) {}
-                                            audioTrack = playWaveform(rec.signalData, rec.sampleRateHz)
-                                            isPlaying = audioTrack != null
-                                        } else {
-                                            // stop
-                                            try { audioTrack?.stop() } catch (_: Exception) {}
-                                            try { audioTrack?.release() } catch (_: Exception) {}
-                                            audioTrack = null
-                                            isPlaying = false
-                                        }
-                                    }
-                                }
+
+
+
+// Cleanup
+
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Icon(
-                                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (isPlaying) "Pause" else "Play",
-                                    tint = OrangePrimary,
-                                    modifier = Modifier.size(32.dp)
-                                )
+
+
+
+                                // -------- PLAY PCM (waveform replay) --------
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    IconButton(
+                                        onClick = {
+                                            val rec = uiState.recording ?: return@IconButton
+
+// Stop WAV first
+                                            if (isPlayingWav) {
+                                                try { wavPlayer?.stop() } catch (_: Exception) {}
+                                                try { wavPlayer?.release() } catch (_: Exception) {}
+                                                wavPlayer = null
+                                                isPlayingWav = false
+                                            }
+
+                                            if (!isPlayingPcm) {
+                                                val pcmPath = rec.pcmFilePath
+                                                val f = File(pcmPath)
+                                                Log.e("PCM_PLAY", "path=$pcmPath exists=${f.exists()} size=${f.length()} sampleRate=${rec.sampleRateHz}")
+
+                                                if (pcmPath.isNullOrBlank()) {
+                                                    Log.e("PCM_PLAY", "pcmFilePath is null/blank for rec=${rec.id}")
+                                                    return@IconButton
+                                                }
+
+                                                // stop/reset playhead
+                                                viewModel.setPlaybackMs(0L)
+                                                pcmStartUptime = SystemClock.uptimeMillis()
+
+                                                val (track, durMs) = playPcmFileFromPath(pcmPath, rec.sampleRateHz)
+
+                                                pcmTrack = track
+                                                pcmDurationMs = durMs
+                                                isPlayingPcm = (track != null && durMs > 0L)
+
+                                                if (!isPlayingPcm) viewModel.setPlaybackMs(0L)
+                                            } else {
+                                                try { pcmTrack?.stop() } catch (_: Exception) {}
+                                                try { pcmTrack?.release() } catch (_: Exception) {}
+                                                pcmTrack = null
+                                                isPlayingPcm = false
+                                                viewModel.setPlaybackMs(0L)
+                                            }
+
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isPlayingPcm) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                            contentDescription = "Play PCM",
+                                            tint = OrangePrimary
+                                        )
+                                    }
+                                    Text("PCM", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                                }
+
+                                // -------- PLAY WAV (MediaPlayer) --------
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    IconButton(
+                                        onClick = {
+                                            val rec = recording ?: return@IconButton
+                                            Log.e("BTN", "recording=${rec?.id} name=${rec.name} pcm=${rec?.pcmFilePath} wav=${rec?.wavFilePath}")
+                                            val path = rec.wavFilePath
+
+                                            // stop PCM if playing
+                                            if (isPlayingPcm) {
+                                                try { pcmTrack?.stop() } catch (_: Exception) {}
+                                                try { pcmTrack?.release() } catch (_: Exception) {}
+                                                pcmTrack = null
+                                                isPlayingPcm = false
+                                                viewModel.setPlaybackMs(0L)
+                                            }
+
+                                            if (path.isNullOrBlank()) return@IconButton
+                                            val file = File(path)
+                                            if (!file.exists() || file.length() <= 44) return@IconButton
+
+                                            if (!isPlayingWav) {
+                                                try {
+                                                    try { wavPlayer?.release() } catch (_: Exception) {}
+                                                    wavPlayer = null
+
+                                                    viewModel.setPlaybackMs(0L)
+
+                                                    val uri = Uri.fromFile(file)
+                                                    val mp = MediaPlayer().apply {
+                                                        setDataSource(context, uri)
+                                                        setOnPreparedListener {
+                                                            start()
+                                                            isPlayingWav = true
+                                                        }
+                                                        setOnCompletionListener {
+                                                            isPlayingWav = false
+                                                            viewModel.setPlaybackMs(0L)
+                                                            try { release() } catch (_: Exception) {}
+                                                            wavPlayer = null
+                                                        }
+                                                        setOnErrorListener { _, what, extra ->
+                                                            Log.e("AUDIO", "MediaPlayer error what=$what extra=$extra")
+                                                            isPlayingWav = false
+                                                            true
+                                                        }
+                                                        prepareAsync()
+                                                    }
+                                                    wavPlayer = mp
+                                                } catch (e: Exception) {
+                                                    Log.e("AUDIO", "MediaPlayer exception", e)
+                                                    isPlayingWav = false
+                                                }
+                                            } else {
+                                                try { wavPlayer?.stop() } catch (_: Exception) {}
+                                                try { wavPlayer?.release() } catch (_: Exception) {}
+                                                wavPlayer = null
+                                                isPlayingWav = false
+                                                viewModel.setPlaybackMs(0L)
+                                            }
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isPlayingWav) Icons.Default.Pause else Icons.Default.PlayCircleFilled,
+                                            contentDescription = "Play WAV",
+                                            tint = OrangePrimary
+                                        )
+                                    }
+                                    Text("WAV", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                                }
+
+                                // -------- DOWNLOAD PCM --------
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    IconButton(
+                                        onClick = {
+                                            val rec = recording ?: return@IconButton
+                                            Log.e("BTN", "recording=${rec?.id} name=${rec?.name} pcm=${rec?.pcmFilePath} wav=${rec?.wavFilePath}")
+                                            val pcmPath = rec.pcmFilePath ?: return@IconButton
+
+                                            exportToDownloads(
+                                                context = context,
+                                                srcPath = pcmPath,
+                                                outName = "recording_${rec.id}.pcm",
+                                                mimeType = "application/octet-stream"
+                                            )
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.FileDownload,
+                                            contentDescription = "Download PCM",
+                                            tint = OrangePrimary
+                                        )
+                                    }
+                                    Text("PCM", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                                }
+
+                                // -------- DOWNLOAD WAV --------
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    IconButton(
+                                        onClick = {
+                                            val rec = recording ?: return@IconButton
+                                            Log.e("BTN", "recording=${rec?.id} name=${rec?.name} pcm=${rec?.pcmFilePath} wav=${rec?.wavFilePath}")
+                                            val wavPath = rec.wavFilePath ?: return@IconButton
+
+                                            exportToDownloads(
+                                                context = context,
+                                                srcPath = wavPath,
+                                                outName = "recording_${rec.id}.wav",
+                                                mimeType = "audio/wav"
+                                            )
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.LibraryMusic,
+                                            contentDescription = "Download WAV",
+                                            tint = OrangePrimary
+                                        )
+                                    }
+                                    Text("WAV", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                                }
                             }
+
+
+
                         }
                     }
 
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Doctor Visit Info Card - NEW FEATURE
+                    DoctorVisitInfoCard(
+                        doctorName = recording?.doctorName,
+                        clinicName = recording?.hospitalName,
+                        visitDate = recording?.doctorVisitDate,
+                        doctorNote = recording?.doctorNote,
+                        diagnosis = recording?.diagnosis,
+                        recommendations = recording?.recommendations,
+                        onEditClick = { viewModel.showDoctorVisitDialog() }
+                    )
                 }
-                
+
                 Spacer(modifier = Modifier.height(16.dp))
-                
+
                 // AI Analysis section
                 Column(
                     modifier = Modifier
@@ -274,7 +653,7 @@ fun AnalysisScreen(
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
-                        
+
                         if (uiState.isAnalyzing) {
                             Spacer(modifier = Modifier.width(8.dp))
                             CircularProgressIndicator(
@@ -284,28 +663,25 @@ fun AnalysisScreen(
                             )
                         }
                     }
-                    
+
                     Spacer(modifier = Modifier.height(12.dp))
-                    
+
                     // Analysis results
                     if (uiState.analysis != null || uiState.recording?.aiAnalysis != null) {
                         val analysis = uiState.analysis ?: uiState.recording?.aiAnalysis
-                        
+
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            // Heart rate status
                             val avg = uiState.recording?.averageBpm ?: 0f
                             AnalysisResultChip(
                                 text = "Heart rate is ${analysis?.heartRateStatus ?: "normal"}! Avg BPM ${"%.1f".format(avg)}.",
                                 isWarning = analysis?.heartRateStatus == "too fast" || analysis?.heartRateStatus == "too slow"
                             )
 
-
-                            // Detected conditions
                             analysis?.detectedConditions?.forEach { condition ->
                                 AnalysisResultChip(
                                     text = "${condition.probability}% of ${condition.name} detected!",
@@ -314,9 +690,9 @@ fun AnalysisScreen(
                             }
                         }
                     }
-                    
+
                     Spacer(modifier = Modifier.height(16.dp))
-                    
+
                     // Chat messages
                     LazyColumn(
                         state = listState,
@@ -329,7 +705,7 @@ fun AnalysisScreen(
                         items(uiState.chatMessages) { message ->
                             ChatMessageBubble(message = message)
                         }
-                        
+
                         if (uiState.isChatLoading) {
                             item {
                                 Row(
@@ -360,7 +736,7 @@ fun AnalysisScreen(
                         }
                     }
                 }
-                
+
                 // Chat input
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -388,9 +764,9 @@ fun AnalysisScreen(
                             ),
                             maxLines = 3
                         )
-                        
+
                         Spacer(modifier = Modifier.width(8.dp))
-                        
+
                         FloatingActionButton(
                             onClick = {
                                 if (messageText.isNotBlank()) {
@@ -414,20 +790,18 @@ fun AnalysisScreen(
     }
 }
 
-private suspend fun playWaveform(
+
+
+private fun playWaveformPcmFromSignal(
     signal: List<Float>,
     sampleRate: Int
-): AudioTrack? = withContext(Dispatchers.Default) {
-    if (signal.isEmpty()) return@withContext null
+): AudioTrack? {
+    if (signal.isEmpty()) return null
 
-    // Convert Float samples back to PCM16.
-    // Your signalData values are approx original_int16 / 1000f.
-    // So multiply by 1000 to recover int16-ish magnitude.
     val pcm = ShortArray(signal.size)
     for (i in signal.indices) {
-        val v = (signal[i] * 1000f).toInt()
-        val clamped = v.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-        pcm[i] = clamped.toShort()
+        val v = (signal[i] * 30000f).toInt()
+        pcm[i] = v.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
     }
 
     val track = AudioTrack(
@@ -447,7 +821,39 @@ private suspend fun playWaveform(
 
     track.write(pcm, 0, pcm.size)
     track.play()
-    track
+    return track
+}
+
+private fun exportToDownloads(
+    context: android.content.Context,
+    srcPath: String,
+    outName: String,
+    mimeType: String
+): Uri? {
+    val src = File(srcPath)
+    if (!src.exists() || src.length() <= 0) return null
+
+    val resolver = context.contentResolver
+    val values = ContentValues().apply {
+        put(MediaStore.MediaColumns.DISPLAY_NAME, outName)
+        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+        put(MediaStore.MediaColumns.IS_PENDING, 1)
+    }
+
+    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return null
+
+    resolver.openOutputStream(uri)?.use { out ->
+        FileInputStream(src).use { input ->
+            input.copyTo(out)
+        }
+    }
+
+    values.clear()
+    values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+    resolver.update(uri, values, null, null)
+
+    return uri
 }
 
 
@@ -498,7 +904,7 @@ private fun ChatMessageBubble(message: ChatMessage) {
             }
             Spacer(modifier = Modifier.width(8.dp))
         }
-        
+
         Card(
             modifier = Modifier.widthIn(max = 280.dp),
             shape = RoundedCornerShape(
@@ -508,9 +914,9 @@ private fun ChatMessageBubble(message: ChatMessage) {
                 bottomEnd = 16.dp
             ),
             colors = CardDefaults.cardColors(
-                containerColor = if (message.isFromUser) 
-                    OrangePrimary 
-                else 
+                containerColor = if (message.isFromUser)
+                    OrangePrimary
+                else
                     MaterialTheme.colorScheme.surfaceVariant
             )
         ) {
@@ -521,7 +927,7 @@ private fun ChatMessageBubble(message: ChatMessage) {
                 modifier = Modifier.padding(12.dp)
             )
         }
-        
+
         if (message.isFromUser) {
             Spacer(modifier = Modifier.width(8.dp))
             Box(
@@ -540,4 +946,71 @@ private fun ChatMessageBubble(message: ChatMessage) {
             }
         }
     }
+
+
+}
+
+@Composable
+private fun LabeledIconButton(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        IconButton(onClick = onClick) {
+            Icon(icon, contentDescription = label, tint = OrangePrimary)
+        }
+        Text(label, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+    }
+}
+private fun formatMs(ms: Long): String {
+    val totalSec = (ms / 1000).toInt().coerceAtLeast(0)
+    val m = totalSec / 60
+    val s = totalSec % 60
+    return String.format("%02d:%02d", m, s)
+}
+
+/**
+ * Reads raw PCM 16-bit little-endian MONO file into floats [-1..1].
+ * If your PCM is stereo, tell me and I’ll adjust the parser.
+ */
+private fun readPcm16LeAsFloat(path: String): List<Float> {
+    val file = java.io.File(path)
+    if (!file.exists()) throw IllegalArgumentException("PCM file not found: $path")
+    if (file.length() < 4) throw IllegalArgumentException("PCM file too small: $path")
+
+    val out = ArrayList<Float>((file.length() / 2).toInt().coerceAtMost(1_000_000))
+    java.io.FileInputStream(file).use { input ->
+        val buf = ByteArray(64 * 1024)
+        var carry: Int? = null
+
+        while (true) {
+            val n = input.read(buf)
+            if (n <= 0) break
+
+            var i = 0
+            if (carry != null) {
+                // complete the previous sample (1 byte left)
+                val lo = carry!!
+                val hi = buf[0].toInt()
+                val s = ((hi shl 8) or (lo and 0xFF)).toShort()
+                out.add((s.toInt() / 32768f).coerceIn(-1f, 1f))
+                carry = null
+                i = 1
+            }
+
+            while (i + 1 < n) {
+                val lo = buf[i].toInt()
+                val hi = buf[i + 1].toInt()
+                val s = ((hi shl 8) or (lo and 0xFF)).toShort()
+                out.add((s.toInt() / 32768f).coerceIn(-1f, 1f))
+                i += 2
+            }
+
+            if (i < n) {
+                carry = buf[i].toInt()
+            }
+        }
+    }
+    return out
 }

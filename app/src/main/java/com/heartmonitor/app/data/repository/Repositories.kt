@@ -18,6 +18,7 @@ class HeartRecordingRepository @Inject constructor(
     private val gson = Gson()
 
     fun getAllRecordings(): Flow<List<HeartRecording>> {
+
         return heartRecordingDao.getAllRecordings().map { entities ->
             entities.map { it.toDomainModel() }
         }
@@ -52,14 +53,6 @@ class HeartRecordingRepository @Inject constructor(
     }
 
     private fun HeartRecordingEntity.toDomainModel(): HeartRecording {
-        val aiAnalysis = aiAnalysisJson?.let {
-            try {
-                gson.fromJson(it, AiAnalysis::class.java)
-            } catch (e: Exception) {
-                null
-            }
-        }
-        
         return HeartRecording(
             id = id,
             name = name,
@@ -70,9 +63,18 @@ class HeartRecordingRepository @Inject constructor(
             verificationStatus = VerificationStatus.valueOf(verificationStatus),
             doctorName = doctorName,
             hospitalName = hospitalName,
-            averageBpm = averageBpm.toFloat(),
+            averageBpm = averageBpm,
             maxBpm = maxBpm,
-            aiAnalysis = aiAnalysis
+            doctorVisitDate = doctorVisitDate,
+            doctorNote = doctorNote,
+            diagnosis = diagnosis,
+            recommendations = recommendations,
+
+            pcmFilePath = pcmFilePath,
+            wavFilePath = wavFilePath,
+
+            audioSampleRate = audioSampleRate,
+            audioChannels = audioChannels
         )
     }
 
@@ -87,9 +89,18 @@ class HeartRecordingRepository @Inject constructor(
             verificationStatus = verificationStatus.name,
             doctorName = doctorName,
             hospitalName = hospitalName,
-            averageBpm = averageBpm.toFloat(),
+            averageBpm = averageBpm,
             maxBpm = maxBpm,
-            aiAnalysisJson = aiAnalysis?.let { gson.toJson(it) }
+            doctorVisitDate = doctorVisitDate,
+            doctorNote = doctorNote,
+            diagnosis = diagnosis,
+            recommendations = recommendations,
+
+            pcmFilePath = pcmFilePath,
+            wavFilePath = wavFilePath,
+
+            audioSampleRate = audioSampleRate,
+            audioChannels = audioChannels
         )
     }
 }
@@ -166,22 +177,22 @@ class ChatRepository @Inject constructor(
                     Always remind users to consult with healthcare professionals for medical advice.
                     Current heart signal data context: $signalContext"""
             )
-            
+
             val chatMessages = listOf(systemMessage) + messages.map {
                 ChatRequestMessage(
                     role = if (it.isFromUser) "user" else "assistant",
                     content = it.content
                 )
             }
-            
+
             val response = openAIService.getChatCompletion(
                 authorization = "Bearer ${BuildConfig.OPENAI_API_KEY}",
                 request = ChatCompletionRequest(messages = chatMessages)
             )
-            
+
             val content = response.choices.firstOrNull()?.message?.content
                 ?: "I couldn't process your request. Please try again."
-            
+
             Result.success(content)
         } catch (e: Exception) {
             Result.failure(e)
@@ -202,7 +213,7 @@ class ChatRepository @Inject constructor(
                 }
                 
                 Only respond with the JSON, no other text."""
-            
+
             val response = openAIService.getChatCompletion(
                 authorization = "Bearer ${BuildConfig.OPENAI_API_KEY}",
                 request = ChatCompletionRequest(
@@ -215,11 +226,11 @@ class ChatRepository @Inject constructor(
                     )
                 )
             )
-            
+
             val content = response.choices.firstOrNull()?.message?.content ?: "{}"
             val gson = Gson()
             val analysis = gson.fromJson(content, AiAnalysis::class.java)
-            
+
             Result.success(analysis)
         } catch (e: Exception) {
             // Return a default analysis if API fails

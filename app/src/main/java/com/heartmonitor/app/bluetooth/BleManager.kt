@@ -16,6 +16,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import android.util.Log
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 
 @Singleton
 class BleManager @Inject constructor(
@@ -32,7 +34,10 @@ class BleManager @Inject constructor(
     private val _connectionState = MutableStateFlow(BleConnectionState.DISCONNECTED)
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
 
-
+    private val _heartAudioData = MutableSharedFlow<ByteArray>(
+        extraBufferCapacity = 64
+    )
+    val heartAudioData: SharedFlow<ByteArray> = _heartAudioData
 
     private val _heartSignalData = MutableSharedFlow<List<Float>>(
         replay = 0,
@@ -49,6 +54,8 @@ class BleManager @Inject constructor(
 
     private val _bpm = MutableStateFlow<Float?>(null)
     val bpm: StateFlow<Float?> = _bpm.asStateFlow()
+
+
 
     // ESP32 Heart Monitor Service UUID - customize this to match your ESP32 firmware
     companion object {
@@ -68,18 +75,23 @@ class BleManager @Inject constructor(
         cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
         cccdQueue.add(cccd)
     }
-
+    private var audioChar: BluetoothGattCharacteristic? = null
     @SuppressLint("MissingPermission")
     private fun writeNextCccd(gatt: BluetoothGatt) {
-        if (cccdQueue.isEmpty()) {
+        val next = cccdQueue.removeFirstOrNull()
+        if (next == null) {
             _connectionState.value = BleConnectionState.READY
             Log.d("BLE", "All notifications enabled -> READY")
             return
         }
 
-        val next = cccdQueue.removeFirst()
         val ok = gatt.writeDescriptor(next)
         Log.d("BLE", "writeDescriptor CCCD uuid=${next.uuid} ok=$ok")
+
+        if (!ok) {
+            // optional: fail fast or retry
+            writeNextCccd(gatt)
+        }
     }
 
 
@@ -131,7 +143,15 @@ class BleManager @Inject constructor(
         }
     }
 
+    private val pcmChannel = kotlinx.coroutines.channels.Channel<ByteArray>(
+        capacity = kotlinx.coroutines.channels.Channel.BUFFERED
+    )
 
+    private val _pcmBytes = MutableSharedFlow<ByteArray>(
+        extraBufferCapacity = 256,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val pcmBytes: SharedFlow<ByteArray> = _pcmBytes.asSharedFlow()
 
 
     private val gattCallback by lazy {
@@ -164,13 +184,19 @@ class BleManager @Inject constructor(
                 status: Int
             ) {
                 Log.d("BLE", "onDescriptorWrite status=$status uuid=${descriptor.uuid}")
+
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    Log.e("BLE", "CCCD write failed: $status")
-                    cccdQueue.clear()
-                    return
+                    Log.e("BLE", "CCCD write failed status=$status for ${descriptor.uuid}")
+                    // You can choose to stop here, but simplest: continue.
                 }
-                writeNextCccd(gatt)
+
+                writeNextCccd(gatt) // ✅ call ONCE only
             }
+
+
+            private lateinit var upAllNotifications: BluetoothGatt
+            private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+
 
 
 
@@ -181,23 +207,26 @@ class BleManager @Inject constructor(
                     return
                 }
 
-                val service = gatt.getService(HEART_MONITOR_SERVICE_UUID)
-                if (service == null) {
-                    Log.e("BLE", "Heart service 180D not found")
+                cccdQueue.clear()
+
+                // Heart service
+                val heartService = gatt.getService(HEART_MONITOR_SERVICE_UUID)
+                if (heartService == null) {
+                    Log.e("BLE", "Heart service not found")
                     return
                 }
 
-                val signalChar = service.getCharacteristic(HEART_SIGNAL_DATA_UUID)
-                val hrChar = service.getCharacteristic(HEART_RATE_MEASUREMENT_UUID)
-
-                cccdQueue.clear()
+                val signalChar = heartService.getCharacteristic(HEART_SIGNAL_DATA_UUID)
+                val hrChar = heartService.getCharacteristic(HEART_RATE_MEASUREMENT_UUID)
 
                 if (signalChar != null) enqueueEnableNotify(gatt, signalChar) else Log.e("BLE", "2A38 not found")
                 if (hrChar != null) enqueueEnableNotify(gatt, hrChar) else Log.e("BLE", "2A37 not found")
 
-                Log.d("BLE", "Enabling notifications: queued=${cccdQueue.size}")
-                writeNextCccd(gatt)
+
+                Log.d("BLE", "Queued CCCDs = ${cccdQueue.size}")
+                writeNextCccd(gatt) // ✅ start chain once
             }
+
 
 
             @Deprecated("Deprecated in Java")
@@ -210,14 +239,16 @@ class BleManager @Inject constructor(
             ) {
                 when (characteristic.uuid) {
                     HEART_SIGNAL_DATA_UUID -> {
-                        val dataPts = parseHeartSignalData(value)
-                        _heartSignalData.tryEmit(dataPts)
+
+                        _heartAudioData.tryEmit(value)              // raw PCM bytes
+                        _heartSignalData.tryEmit(parseHeartSignalData(value)) // floats
                     }
 
                     HEART_RATE_MEASUREMENT_UUID -> {
                         val bpmValue = parseHeartRateMeasurement(value)
                         _bpm.value = bpmValue
                     }
+
                 }
             }
 
@@ -323,9 +354,10 @@ class BleManager @Inject constructor(
     fun isBluetoothEnabled(): Boolean = bluetoothAdapter?.isEnabled == true
 }
 
-private fun ArrayDeque<BluetoothGattDescriptor>.removeFirstOrNull() {
-    TODO("Not yet implemented")
+private fun <T> ArrayDeque<T>.removeFirstOrNull(): T? {
+    return if (isEmpty()) null else removeFirst()
 }
+
 
 enum class BleConnectionState {
     DISCONNECTED,

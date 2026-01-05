@@ -18,7 +18,7 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        
+
         // Add your OpenAI API key here (for production, use BuildConfig or secure storage)
         buildConfigField("String", "OPENAI_API_KEY", "\"YOUR_OPENAI_API_KEY\"")
     }
@@ -60,7 +60,6 @@ dependencies {
 
     // Hilt
     implementation(libs.hilt.android)
-    implementation(libs.androidx.compose.foundation.layout)
     ksp(libs.hilt.android.compiler)
     implementation(libs.hilt.navigation.compose)
 
@@ -92,4 +91,7 @@ dependencies {
 
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+
+    // For img uploading
+    implementation(libs.coil.compose)
 }

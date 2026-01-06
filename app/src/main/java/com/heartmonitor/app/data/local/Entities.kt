@@ -18,7 +18,10 @@ data class HeartRecordingEntity(
     val name: String,
     val timestamp: LocalDateTime,
     val duration: Long,
-    val signalData: List<Float>,
+    // ❌ REMOVED: signalData is too large for database
+    // Signal data is loaded from PCM file when needed
+    val bpmSeries: List<Float> = emptyList(),  // ✅ Keep BPM series (much smaller)
+    val sampleRateHz: Int = 8000,
     val healthStatus: String,
     val verificationStatus: String,
     val doctorName: String? = null,

@@ -58,7 +58,9 @@ class HeartRecordingRepository @Inject constructor(
             name = name,
             timestamp = timestamp,
             duration = duration,
-            signalData = signalData,
+            signalData = emptyList(),  // ✅ Empty - will be loaded from PCM file when needed
+            bpmSeries = bpmSeries,
+            sampleRateHz = sampleRateHz,
             healthStatus = HealthStatus.valueOf(healthStatus),
             verificationStatus = VerificationStatus.valueOf(verificationStatus),
             doctorName = doctorName,
@@ -84,7 +86,9 @@ class HeartRecordingRepository @Inject constructor(
             name = name,
             timestamp = timestamp,
             duration = duration,
-            signalData = signalData,
+            // ✅ Don't save signalData - it's too large and redundant (stored in PCM file)
+            bpmSeries = bpmSeries,
+            sampleRateHz = sampleRateHz,
             healthStatus = healthStatus.name,
             verificationStatus = verificationStatus.name,
             doctorName = doctorName,

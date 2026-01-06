@@ -12,7 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         UserProfileEntity::class,
         DoctorEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -34,9 +34,16 @@ abstract class HeartMonitorDatabase : RoomDatabase() {
 
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE heart_recordings ADD COLUMN audioFilePath TEXT")
+                // Add audio file fields and remove signalData (too large for database)
+                db.execSQL("ALTER TABLE heart_recordings ADD COLUMN pcmFilePath TEXT")
+                db.execSQL("ALTER TABLE heart_recordings ADD COLUMN wavFilePath TEXT")
                 db.execSQL("ALTER TABLE heart_recordings ADD COLUMN audioSampleRate INTEGER NOT NULL DEFAULT 8000")
                 db.execSQL("ALTER TABLE heart_recordings ADD COLUMN audioChannels INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE heart_recordings ADD COLUMN bpmSeries TEXT NOT NULL DEFAULT '[]'")
+                db.execSQL("ALTER TABLE heart_recordings ADD COLUMN sampleRateHz INTEGER NOT NULL DEFAULT 8000")
+
+                // Note: Cannot drop signalData column in SQLite, but new entities won't use it
+                // Old data will be ignored when loading from database
             }
         }
     }

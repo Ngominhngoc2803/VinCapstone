@@ -267,7 +267,7 @@ class BleManager @Inject constructor(
                 when (characteristic.uuid) {
                     HEART_SIGNAL_DATA_UUID -> {
                         // Log data reception for debugging
-                        Log.d("BLE_DATA", "Received ${value.size} bytes from 0x2A38")
+                        //Log.d("BLE_DATA", "Received ${value.size} bytes from 0x2A38")
 
                         // 1) PCM raw bytes -> Channel (NO DROP)
                         val sendResult = pcmChannel.trySend(value)

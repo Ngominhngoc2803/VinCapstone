@@ -507,10 +507,13 @@ fun AnalysisScreen(
                                             val rec = recording ?: return@IconButton
                                             val pcmPath = rec.pcmFilePath ?: return@IconButton
 
+                                            // Use recording name for filename
+                                            val fileName = sanitizeFileName(rec.name) + ".pcm"
+
                                             val uri = exportToDownloads(
                                                 context = context,
                                                 srcPath = pcmPath,
-                                                outName = "recording_${rec.id}.pcm",
+                                                outName = fileName,
                                                 mimeType = "application/octet-stream"
                                             )
 
@@ -537,10 +540,13 @@ fun AnalysisScreen(
                                             val rec = recording ?: return@IconButton
                                             val wavPath = rec.wavFilePath ?: return@IconButton
 
+                                            // Use recording name for filename
+                                            val fileName = sanitizeFileName(rec.name) + ".wav"
+
                                             val uri = exportToDownloads(
                                                 context = context,
                                                 srcPath = wavPath,
-                                                outName = "recording_${rec.id}.wav",
+                                                outName = fileName,
                                                 mimeType = "audio/wav"
                                             )
 
@@ -922,6 +928,19 @@ private fun formatMs(ms: Long): String {
     val m = totalSec / 60
     val s = totalSec % 60
     return String.format("%02d:%02d", m, s)
+}
+
+/**
+ * Sanitize recording name for use as filename
+ * Removes invalid characters and limits length
+ */
+private fun sanitizeFileName(name: String): String {
+    return name
+        .replace(Regex("[^a-zA-Z0-9._-]"), "_")  // Replace invalid chars with underscore
+        .replace(Regex("_+"), "_")               // Remove consecutive underscores
+        .trim('_')                               // Remove leading/trailing underscores
+        .take(50)                                // Limit to 50 characters
+        .ifBlank { "recording" }                 // Fallback if empty
 }
 
 /**

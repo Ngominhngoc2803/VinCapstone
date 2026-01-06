@@ -40,6 +40,7 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.content.ContentValues
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import kotlinx.coroutines.Dispatchers
@@ -53,6 +54,8 @@ import kotlinx.coroutines.delay
 import java.io.BufferedInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import android.widget.Toast
+import androidx.annotation.RequiresApi
 
 private fun playPcmFileFromPath(
     path: String,
@@ -116,6 +119,7 @@ private fun playPcmFileFromPath(
 }
 
 
+@RequiresApi(Build.VERSION_CODES.Q)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AnalysisScreen(
@@ -270,8 +274,8 @@ fun AnalysisScreen(
                             val fallbackSignal = rec?.signalData ?: emptyList()
                             val signal: List<Float> = pcmSignal ?: fallbackSignal
 
-                            // 3) Choose sample rate (PCM uses audioSampleRate if you have it; else sampleRateHz)
-                            val sampleRateHz = (rec?.audioSampleRate ?: rec?.sampleRateHz ?: 8000).toFloat()
+                            // 3) Choose sample rate (use audioSampleRate for PCM audio files)
+                            val sampleRateHz = (rec?.audioSampleRate ?: 8000).toFloat()
 
                             val totalMs = if (signal.isNotEmpty()) ((signal.size / sampleRateHz) * 1000f).toLong() else 0L
                             val currentMs = uiState.playbackMs.coerceIn(0L, totalMs)
@@ -459,7 +463,7 @@ fun AnalysisScreen(
                                                 viewModel.setPlaybackMs(0L)
                                                 pcmStartUptime = SystemClock.uptimeMillis()
 
-                                                val (track, durMs) = playPcmFileFromPath(pcmPath, rec.sampleRateHz)
+                                                val (track, durMs) = playPcmFileFromPath(pcmPath, rec.audioSampleRate ?: 8000)
 
                                                 pcmTrack = track
                                                 pcmDurationMs = durMs
@@ -564,12 +568,18 @@ fun AnalysisScreen(
                                             Log.e("BTN", "recording=${rec?.id} name=${rec?.name} pcm=${rec?.pcmFilePath} wav=${rec?.wavFilePath}")
                                             val pcmPath = rec.pcmFilePath ?: return@IconButton
 
-                                            exportToDownloads(
+                                            val uri = exportToDownloads(
                                                 context = context,
                                                 srcPath = pcmPath,
                                                 outName = "recording_${rec.id}.pcm",
                                                 mimeType = "application/octet-stream"
                                             )
+
+                                            if (uri != null) {
+                                                Toast.makeText(context, "PCM saved to Downloads", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "Failed to export PCM", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                     ) {
                                         Icon(
@@ -589,12 +599,18 @@ fun AnalysisScreen(
                                             Log.e("BTN", "recording=${rec?.id} name=${rec?.name} pcm=${rec?.pcmFilePath} wav=${rec?.wavFilePath}")
                                             val wavPath = rec.wavFilePath ?: return@IconButton
 
-                                            exportToDownloads(
+                                            val uri = exportToDownloads(
                                                 context = context,
                                                 srcPath = wavPath,
                                                 outName = "recording_${rec.id}.wav",
                                                 mimeType = "audio/wav"
                                             )
+
+                                            if (uri != null) {
+                                                Toast.makeText(context, "WAV saved to Downloads", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "Failed to export WAV", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                     ) {
                                         Icon(
@@ -824,6 +840,7 @@ private fun playWaveformPcmFromSignal(
     return track
 }
 
+@RequiresApi(Build.VERSION_CODES.Q)
 private fun exportToDownloads(
     context: android.content.Context,
     srcPath: String,

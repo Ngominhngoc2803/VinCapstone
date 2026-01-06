@@ -22,10 +22,10 @@ import java.time.LocalDateTime
 import javax.inject.Inject
 import android.content.Context
 import android.util.Log
-import android.util.Log.e
 import dagger.hilt.android.qualifiers.ApplicationContext
 import com.heartmonitor.app.utils.convertPcmToWav
 import java.io.File
+import java.io.FileOutputStream
 
 
 @HiltViewModel
@@ -36,7 +36,6 @@ class HomeViewModel @Inject constructor(
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
-
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
@@ -46,77 +45,21 @@ class HomeViewModel @Inject constructor(
 
     private var recordingJob: Job? = null
     private val signalBuffer = mutableListOf<Float>()
-
     private val bpmBuffer = mutableListOf<Float>()
-    private var currentMaxBpmFromBle: Int = 0
 
     private var recordingStartTime: Long = 0
-
-    private var bpmJob: Job? = null
-    private var bpmSum = 0f
-    private var bpmCount = 0
-    private var bpmMax = 0f
-
-    private var wavWriter: com.heartmonitor.app.utils.WavWriter? = null
-    private var currentAudioPath: String? = null
-    private var currentAudioFile: java.io.File? = null
-
-    private var pcmOut: java.io.FileOutputStream? = null
+    private var pcmOut: FileOutputStream? = null
     private var currentPcmPath: String? = null
-    private val AUDIO_SAMPLE_RATE = 8000
-    private val AUDIO_CHANNELS = 1
     private var currentWavPath: String? = null
 
-
-
-
-    private fun resetBpmStats() {
-        bpmSum = 0f
-        bpmCount = 0
-        bpmMax = 0f
-    }
-
-    private fun getAvgBpm(): Float {
-        return if (bpmCount == 0) 0f else bpmSum / bpmCount
-    }
+    private val AUDIO_SAMPLE_RATE = 8000
+    private val AUDIO_CHANNELS = 1
 
     init {
         loadRecordings()
         observeBleSignal()
         observeBleBpm()
-        observeBlePcmAudio()
-        observeBleAudio()
-        observeBlePcmBytes()
-
-    }
-    private fun observeBleAudio() {
-        viewModelScope.launch {
-            bleManager.heartAudioData.collect { pcmBytes ->
-                if (_uiState.value.isRecording) {
-                    android.util.Log.d("PCM", "recv bytes=${pcmBytes.size}")
-                    try {
-                        pcmOut?.write(pcmBytes)
-                    } catch (e: Exception) {
-                        android.util.Log.e("PCM", "write failed", e)
-                    }
-                }
-            }
-        }
-    }
-
-
-    private fun observeBlePcmBytes() {
-        viewModelScope.launch {
-            bleManager.heartAudioData.collect { pcmBytes ->
-                if (_uiState.value.isRecording) {
-                    try {
-                        pcmOut?.write(pcmBytes)
-                    } catch (e: Exception) {
-                        android.util.Log.e("PCM", "write failed", e)
-                    }
-                }
-            }
-        }
+        observeBlePcmAudio()  // ONLY ONE PCM collector!
     }
 
     private fun loadRecordings() {
@@ -133,6 +76,7 @@ class HomeViewModel @Inject constructor(
                 if (_uiState.value.isRecording) {
                     signalBuffer.addAll(newData)
 
+                    // Display only last 500 samples for live waveform
                     val displayData = if (signalBuffer.size > 500) {
                         signalBuffer.takeLast(500)
                     } else {
@@ -150,22 +94,44 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-
-
     private fun observeBleBpm() {
         viewModelScope.launch {
             bleManager.bpm.collect { bpmValue ->
                 if (_uiState.value.isRecording && bpmValue != null && bpmValue.isFinite()) {
                     bpmBuffer.add(bpmValue)
-                    val maxNow = maxOf(currentMaxBpmFromBle, bpmValue.toInt())
-                    currentMaxBpmFromBle = maxNow
 
-                    // Update UI live (optional)
                     _uiState.update { state ->
                         state.copy(
                             currentBpm = bpmValue.toInt(),
                             currentMaxBpm = maxOf(state.currentMaxBpm, bpmValue.toInt())
                         )
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * SINGLE PCM audio collector - writes BLE audio packets to PCM file
+     */
+    private fun observeBlePcmAudio() {
+        viewModelScope.launch {
+            var totalBytesWritten = 0L
+            var chunkCount = 0
+
+            bleManager.pcmBytes.collect { chunk ->
+                if (_uiState.value.isRecording) {
+                    try {
+                        pcmOut?.write(chunk)
+                        totalBytesWritten += chunk.size
+                        chunkCount++
+
+                        // Log every 50 chunks to avoid spam
+                        if (chunkCount % 50 == 0) {
+                            Log.d("PCM_WRITE", "Wrote $chunkCount chunks, total: $totalBytesWritten bytes")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("PCM", "Failed to write PCM chunk", e)
                     }
                 }
             }
@@ -191,45 +157,24 @@ class HomeViewModel @Inject constructor(
         bleManager.disconnect()
     }
 
-    private fun observeBlePcmAudio() {
-        viewModelScope.launch {
-            bleManager.pcmBytes.collect { chunk ->
-                if (_uiState.value.isRecording) {
-                    // chunk is raw PCM16LE bytes from ESP32 (2A38)
-                    wavWriter?.writePcmBytes(chunk)
-                }
-            }
-        }
-    }
-
-
     fun startRecording(name: String = "Recording") {
+        // Clear buffers
         signalBuffer.clear()
-        recordingStartTime = System.currentTimeMillis()
         bpmBuffer.clear()
-        currentMaxBpmFromBle = 0
+        recordingStartTime = System.currentTimeMillis()
 
-        val fileName = "rec_${System.currentTimeMillis()}.wav"
-        val file = java.io.File(context.filesDir, fileName) // needs context in VM (see note below)
+        // Create PCM and WAV file paths with single timestamp
+        val timestamp = System.currentTimeMillis()
+        val base = "rec_$timestamp"
 
-        val base = "rec_${System.currentTimeMillis()}"
-        val pcmFile = java.io.File(context.filesDir, "$base.pcm")
+        val pcmFile = File(context.filesDir, "$base.pcm")
         currentPcmPath = pcmFile.absolutePath
-        pcmOut = java.io.FileOutputStream(pcmFile, true)
-        val wavFile = java.io.File(context.filesDir, "$base.wav")
+        pcmOut = FileOutputStream(pcmFile, false)  // false = overwrite if exists
 
-        currentPcmPath = pcmFile.absolutePath
+        val wavFile = File(context.filesDir, "$base.wav")
         currentWavPath = wavFile.absolutePath
 
-        wavWriter = com.heartmonitor.app.utils.WavWriter(
-            file = file,
-            sampleRate = AUDIO_SAMPLE_RATE,
-            channels = AUDIO_CHANNELS
-        )
-
-        pcmOut = java.io.FileOutputStream(pcmFile, false)
-
-
+        Log.d("Recording", "Started recording: PCM=$currentPcmPath")
 
         _uiState.update {
             it.copy(
@@ -242,34 +187,10 @@ class HomeViewModel @Inject constructor(
             )
         }
 
-        resetBpmStats()
-
-        bpmJob?.cancel()
-        bpmJob = viewModelScope.launch {
-            bleManager.bpm
-                .filterNotNull()
-                .filter { it in 30f..220f } // sanity range
-                .collect { bpm ->
-
-                    bpmSum += bpm
-                    bpmCount += 1
-                    bpmMax = maxOf(bpmMax, bpm)
-
-                    _uiState.update { state ->
-                        state.copy(
-                            currentBpm = bpm.toInt(),
-                            currentMaxBpm = maxOf(state.currentMaxBpm, bpm.toInt())
-                        )
-                    }
-                }
-        }
-
-
         // If BLE is not connected, simulate data for testing
         if (bleConnectionState.value == BleConnectionState.DISCONNECTED) {
             startSimulatedRecording()
         }
-
     }
 
     private fun startSimulatedRecording() {
@@ -278,31 +199,28 @@ class HomeViewModel @Inject constructor(
                 // Generate simulated heart signal data
                 val simulatedData = generateSimulatedHeartSignal()
                 signalBuffer.addAll(simulatedData)
-                
+
                 val displayData = if (signalBuffer.size > 500) {
                     signalBuffer.takeLast(500)
                 } else {
                     signalBuffer.toList()
                 }
-                
+
                 val currentBpm = SignalProcessor.calculateBpm(signalBuffer)
 
-                val bpm = currentBpm.toFloat()
-                if (bpm in 30f..220f) {
-                    bpmSum += bpm
-                    bpmCount += 1
-                    bpmMax = maxOf(bpmMax, bpm)
+                if (currentBpm in 30..220) {
+                    bpmBuffer.add(currentBpm.toFloat())
                 }
+
                 _uiState.update { state ->
-                    val maxBpm = maxOf(state.currentMaxBpm, currentBpm)
                     state.copy(
                         currentSignalData = displayData,
                         currentBpm = currentBpm,
-                        currentMaxBpm = maxBpm,
+                        currentMaxBpm = maxOf(state.currentMaxBpm, currentBpm),
                         recordingDuration = System.currentTimeMillis() - recordingStartTime
                     )
                 }
-                
+
                 delay(100) // Update every 100ms
             }
         }
@@ -312,7 +230,7 @@ class HomeViewModel @Inject constructor(
         val data = mutableListOf<Float>()
         val bpm = (70..110).random()
         val samplesPerBeat = 1000 * 60 / bpm / 10 // For 100ms update interval
-        
+
         repeat(10) { i ->
             val phase = (i % samplesPerBeat).toFloat() / samplesPerBeat
             val value = when {
@@ -324,48 +242,34 @@ class HomeViewModel @Inject constructor(
             }
             data.add(value + (Math.random().toFloat() - 0.5f) * 0.05f) // Add noise
         }
-        
+
         return data
     }
 
     fun stopRecording() {
-        try { pcmOut?.flush() } catch (_: Exception) {}
-        try { pcmOut?.close() } catch (_: Exception) {}
+        // 1. Stop and close PCM file
+        try {
+            pcmOut?.flush()
+            pcmOut?.close()
+        } catch (e: Exception) {
+            Log.e("PCM", "Error closing PCM file", e)
+        }
         pcmOut = null
 
-        val pcmPath = currentPcmPath
-        val wavPath = currentWavPath
-
-        if (pcmPath != null && wavPath != null) {
-            com.heartmonitor.app.utils.convertPcmToWav(
-                pcmFile = java.io.File(pcmPath),
-                wavFile = java.io.File(wavPath),
-                sampleRate = AUDIO_SAMPLE_RATE,
-                channels = AUDIO_CHANNELS
-            )
-            android.util.Log.e("WAV", "wavSize=${java.io.File(wavPath).length()}")
-        }
-
-
+        // 2. Stop recording job
         recordingJob?.cancel()
         recordingJob = null
-        try {
-            wavWriter?.close()
-        } catch (_: Exception) { }
-        wavWriter = null
 
         viewModelScope.launch {
             val signalData = signalBuffer.toList()
 
-            // ✅ Average BPM from BLE samples (preferred)
+            // Calculate BPM statistics
             val avgBpmFromBle = if (bpmBuffer.isNotEmpty()) {
                 bpmBuffer.average().toFloat()
             } else {
-                // fallback
                 SignalProcessor.calculateBpm(signalData).toFloat()
             }
 
-            // ✅ Max BPM from BLE samples (preferred)
             val maxBpmFromBle = if (bpmBuffer.isNotEmpty()) {
                 bpmBuffer.maxOrNull()?.toInt() ?: 0
             } else {
@@ -378,66 +282,88 @@ class HomeViewModel @Inject constructor(
                 else -> HealthStatus.GOOD_HEALTH
             }
 
-            try { pcmOut?.flush() } catch (_: Exception) {}
-            try { pcmOut?.close() } catch (_: Exception) {}
-            pcmOut = null
-            val wavFile = java.io.File(context.filesDir, "rec_${System.currentTimeMillis()}.wav")
-            val wavPath = wavFile.absolutePath
+            // 3. Convert PCM to WAV (ONCE!)
             val pcmPath = currentPcmPath
+            val wavPath = currentWavPath
 
-            if (!pcmPath.isNullOrBlank()) {
-                val pcmSize = java.io.File(pcmPath).length()
-                android.util.Log.e("PCM", "stopRecording pcmPath=$pcmPath size=$pcmSize")
-                convertPcmToWav(
-                    pcmFile = java.io.File(pcmPath),
-                    wavFile = File(wavPath),
-                    sampleRate = AUDIO_SAMPLE_RATE,
-                    channels = AUDIO_CHANNELS
-                )
-                Log.e(
-                    "WAV",
-                    "wavPath=$pcmPath size=${File(pcmPath!!).length()}"
-                )
+            if (!pcmPath.isNullOrBlank() && !wavPath.isNullOrBlank()) {
+                val pcmFile = File(pcmPath)
+                val wavFile = File(wavPath)
+
+                if (pcmFile.exists()) {
+                    val pcmSize = pcmFile.length()
+                    val expectedSize = (_uiState.value.recordingDuration / 1000.0 * AUDIO_SAMPLE_RATE * 2).toLong()
+
+                    Log.w("PCM_ANALYSIS", """
+                        ╔════════════════════════════════════════════════
+                        ║ PCM Recording Analysis
+                        ╠════════════════════════════════════════════════
+                        ║ Duration: ${_uiState.value.recordingDuration}ms
+                        ║ PCM File Size: $pcmSize bytes
+                        ║ Expected Size: $expectedSize bytes
+                        ║ Percentage: ${(pcmSize * 100.0 / expectedSize).toInt()}%
+                        ║ Sample Rate: $AUDIO_SAMPLE_RATE Hz
+                        ╚════════════════════════════════════════════════
+                    """.trimIndent())
+
+                    if (pcmSize > 0) {
+                        try {
+                            convertPcmToWav(
+                                pcmFile = pcmFile,
+                                wavFile = wavFile,
+                                sampleRate = AUDIO_SAMPLE_RATE,
+                                channels = AUDIO_CHANNELS
+                            )
+                            Log.d("WAV", "WAV created: ${wavFile.length()} bytes")
+                        } catch (e: Exception) {
+                            Log.e("WAV", "Failed to convert PCM to WAV", e)
+                        }
+                    } else {
+                        Log.e("WAV", "PCM file is empty - cannot create WAV")
+                    }
+                } else {
+                    Log.w("WAV", "PCM file missing: $pcmPath")
+                }
             }
 
-
-
+            // 4. Save recording to database
             val recording = HeartRecording(
                 name = _uiState.value.currentRecordingName,
                 timestamp = LocalDateTime.now(),
                 duration = _uiState.value.recordingDuration,
-                signalData = signalData,
-                bpmSeries = bpmBuffer.toList(),       // ✅ NEW
-                sampleRateHz = 8000,                 // ✅ NEW
+                signalData = signalData,  // Processed signal for display
+                bpmSeries = bpmBuffer.toList(),
+                sampleRateHz = 8000,
                 healthStatus = healthStatus,
                 verificationStatus = VerificationStatus.NOT_VERIFIED,
                 averageBpm = avgBpmFromBle,
                 maxBpm = maxBpmFromBle,
-
-                pcmFilePath = currentPcmPath,
-
+                pcmFilePath = currentPcmPath,  // Raw audio file
                 audioSampleRate = AUDIO_SAMPLE_RATE,
                 audioChannels = AUDIO_CHANNELS,
-                wavFilePath = currentWavPath
-
-
+                wavFilePath = currentWavPath  // WAV audio file
             )
 
             recordingRepository.saveRecording(recording)
 
+            // 5. Reset UI state
             _uiState.update {
                 it.copy(
                     isRecording = false,
-                    currentSignalData = emptyList()
+                    currentSignalData = emptyList(),
+                    currentBpm = 0,
+                    currentMaxBpm = 0,
+                    recordingDuration = 0
                 )
             }
 
+            // 6. Clear buffers and paths
             signalBuffer.clear()
             bpmBuffer.clear()
-            currentMaxBpmFromBle = 0
+            currentPcmPath = null
+            currentWavPath = null
         }
     }
-
 
     fun selectRecording(recording: HeartRecording) {
         _uiState.update {
@@ -453,17 +379,16 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun generateBpmChartData(recording: HeartRecording): List<BpmDataPoint> {
-        // Generate BPM data points over time from the recording
         val windowSize = 1000 // 1 second windows
         val signalData = recording.signalData
-        
+
         if (signalData.size < windowSize) {
             return listOf(BpmDataPoint(0f, recording.averageBpm.toFloat()))
         }
-        
+
         val dataPoints = mutableListOf<BpmDataPoint>()
         var index = 0
-        
+
         while (index + windowSize <= signalData.size) {
             val window = signalData.subList(index, index + windowSize)
             val bpm = SignalProcessor.calculateBpm(window)
@@ -471,7 +396,7 @@ class HomeViewModel @Inject constructor(
             dataPoints.add(BpmDataPoint(timeSeconds, bpm.toFloat()))
             index += windowSize / 2 // 50% overlap
         }
-        
+
         return dataPoints
     }
 

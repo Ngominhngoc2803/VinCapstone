@@ -21,6 +21,9 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.util.UUID
 import javax.inject.Inject
+import android.util.Log
+import java.io.File
+import java.io.FileInputStream
 
 @HiltViewModel
 class AnalysisViewModel @Inject constructor(
@@ -41,7 +44,6 @@ class AnalysisViewModel @Inject constructor(
     }
 
     private var playbackJob: kotlinx.coroutines.Job? = null
-    private var totalDurationMs: Long = 0L
 
     private fun loadRecording() {
         viewModelScope.launch {
@@ -50,9 +52,22 @@ class AnalysisViewModel @Inject constructor(
             val recording = recordingRepository.getRecordingById(recordingId)
 
             if (recording != null) {
+                // Load full signal from PCM file if available
+                val fullSignal = if (!recording.pcmFilePath.isNullOrBlank()) {
+                    try {
+                        loadPcmAsFloatSignal(recording.pcmFilePath)
+                    } catch (e: Exception) {
+                        Log.e("AnalysisVM", "Failed to load PCM file: ${e.message}", e)
+                        recording.signalData  // fallback to stored signal
+                    }
+                } else {
+                    Log.w("AnalysisVM", "No PCM file path, using stored signalData")
+                    recording.signalData
+                }
+
                 _uiState.update {
                     it.copy(
-                        recording = recording,
+                        recording = recording.copy(signalData = fullSignal),
                         isLoading = false
                     )
                 }
@@ -72,6 +87,63 @@ class AnalysisViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Load PCM16 LE file and convert to float signal [-1.0, 1.0]
+     */
+    private fun loadPcmAsFloatSignal(pcmPath: String): List<Float> {
+        val file = File(pcmPath)
+        if (!file.exists()) {
+            Log.e("AnalysisVM", "PCM file not found: $pcmPath")
+            return emptyList()
+        }
+
+        if (file.length() < 2) {
+            Log.e("AnalysisVM", "PCM file too small: ${file.length()} bytes")
+            return emptyList()
+        }
+
+        val floatList = mutableListOf<Float>()
+
+        FileInputStream(file).use { fis ->
+            val buffer = ByteArray(8192)
+            var carryByte: Byte? = null
+
+            while (true) {
+                val bytesRead = fis.read(buffer)
+                if (bytesRead <= 0) break
+
+                var i = 0
+
+                // Handle carry byte from previous chunk
+                if (carryByte != null) {
+                    val lo = carryByte!!.toInt() and 0xFF
+                    val hi = buffer[0].toInt() and 0xFF
+                    val sample = ((hi shl 8) or lo).toShort()
+                    floatList.add(sample / 32768f)
+                    carryByte = null
+                    i = 1
+                }
+
+                // Convert PCM16 LE to float
+                while (i + 1 < bytesRead) {
+                    val lo = buffer[i].toInt() and 0xFF
+                    val hi = buffer[i + 1].toInt() and 0xFF
+                    val sample = ((hi shl 8) or lo).toShort()
+                    floatList.add(sample / 32768f)
+                    i += 2
+                }
+
+                // Save odd byte for next iteration
+                if (i < bytesRead) {
+                    carryByte = buffer[i]
+                }
+            }
+        }
+
+        Log.d("AnalysisVM", "Loaded ${floatList.size} PCM samples from $pcmPath")
+        return floatList
+    }
+
     private fun loadDoctors() {
         viewModelScope.launch {
             userRepository.getAllDoctors().collect { doctors ->
@@ -84,7 +156,6 @@ class AnalysisViewModel @Inject constructor(
         _uiState.update { it.copy(playbackMs = ms) }
     }
 
-
     fun togglePlay() {
         val rec = _uiState.value.recording ?: return
 
@@ -96,8 +167,11 @@ class AnalysisViewModel @Inject constructor(
     }
 
     private fun startPlaybackInternal(recording: HeartRecording) {
-        val sampleRate = 8000f
-        totalDurationMs = ((recording.signalData.size / sampleRate) * 1000f).toLong()
+        val sampleRate = recording.audioSampleRate ?: 8000
+        val totalSamples = recording.signalData.size
+        val totalDurationMs = ((totalSamples * 1000L) / sampleRate)
+
+        Log.d("AnalysisVM", "Starting playback: samples=$totalSamples rate=$sampleRate duration=${totalDurationMs}ms")
 
         _uiState.update { it.copy(isPlaying = true, playbackMs = 0L) }
 
@@ -116,7 +190,7 @@ class AnalysisViewModel @Inject constructor(
                     break
                 }
 
-                kotlinx.coroutines.delay(33)
+                kotlinx.coroutines.delay(33)  // ~30 fps update
             }
         }
     }

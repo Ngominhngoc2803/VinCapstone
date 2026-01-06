@@ -18,6 +18,11 @@ import android.util.Log
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.receiveAsFlow
+
 
 @Singleton
 class BleManager @Inject constructor(
@@ -35,13 +40,13 @@ class BleManager @Inject constructor(
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
 
     private val _heartAudioData = MutableSharedFlow<ByteArray>(
-        extraBufferCapacity = 64
+        extraBufferCapacity = 256
     )
     val heartAudioData: SharedFlow<ByteArray> = _heartAudioData
 
     private val _heartSignalData = MutableSharedFlow<List<Float>>(
         replay = 0,
-        extraBufferCapacity = 64,
+        extraBufferCapacity = 256,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     val heartSignalData: SharedFlow<List<Float>> = _heartSignalData.asSharedFlow()
@@ -56,6 +61,12 @@ class BleManager @Inject constructor(
     val bpm: StateFlow<Float?> = _bpm.asStateFlow()
 
 
+    // UNLIMITED is OK here because your PCM total is small (~1MB per 38s).
+// This guarantees you DON'T drop BLE packets when the collector is slightly slower.
+    private val pcmChannel = Channel<ByteArray>(capacity = Channel.UNLIMITED)
+
+    // Public stream for PCM bytes
+    val pcmBytes: Flow<ByteArray> = pcmChannel.receiveAsFlow()
 
     // ESP32 Heart Monitor Service UUID - customize this to match your ESP32 firmware
     companion object {
@@ -143,15 +154,10 @@ class BleManager @Inject constructor(
         }
     }
 
-    private val pcmChannel = kotlinx.coroutines.channels.Channel<ByteArray>(
-        capacity = kotlinx.coroutines.channels.Channel.BUFFERED
-    )
 
-    private val _pcmBytes = MutableSharedFlow<ByteArray>(
-        extraBufferCapacity = 256,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
-    )
-    val pcmBytes: SharedFlow<ByteArray> = _pcmBytes.asSharedFlow()
+
+
+
 
 
     private val gattCallback by lazy {
@@ -163,7 +169,15 @@ class BleManager @Inject constructor(
                     BluetoothProfile.STATE_CONNECTED -> {
                         _connectionState.value = BleConnectionState.CONNECTED
                         bluetoothGatt = gatt
-                        gatt.discoverServices()
+
+                        // ✅ REQUEST LARGER MTU BEFORE DISCOVERING SERVICES
+                        Log.d("BLE", "Requesting MTU 517")
+                        val mtuRequested = gatt.requestMtu(517)
+                        if (!mtuRequested) {
+                            Log.e("BLE", "MTU request failed, proceeding with discovery")
+                            gatt.discoverServices()
+                        }
+                        // Note: If MTU request succeeds, onMtuChanged will be called
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         _connectionState.value = BleConnectionState.DISCONNECTED
@@ -175,6 +189,19 @@ class BleManager @Inject constructor(
                         startScan(force = true)
                     }
                 }
+            }
+
+            // ✅ ADD MTU CALLBACK
+            @SuppressLint("MissingPermission")
+            override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+                Log.d("BLE", "onMtuChanged: mtu=$mtu status=$status")
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    Log.d("BLE", "✅ MTU negotiated to $mtu bytes")
+                } else {
+                    Log.e("BLE", "❌ MTU negotiation failed with status $status")
+                }
+                // Proceed with service discovery regardless
+                gatt.discoverServices()
             }
 
             @SuppressLint("MissingPermission")
@@ -239,14 +266,26 @@ class BleManager @Inject constructor(
             ) {
                 when (characteristic.uuid) {
                     HEART_SIGNAL_DATA_UUID -> {
+                        // Log data reception for debugging
+                        Log.d("BLE_DATA", "Received ${value.size} bytes from 0x2A38")
 
-                        _heartAudioData.tryEmit(value)              // raw PCM bytes
-                        _heartSignalData.tryEmit(parseHeartSignalData(value)) // floats
+                        // 1) PCM raw bytes -> Channel (NO DROP)
+                        val sendResult = pcmChannel.trySend(value)
+                        if (sendResult.isFailure) {
+                            Log.e("BLE", "pcmChannel.trySend FAILED (buffer full/closed)")
+                        } else {
+                            Log.v("BLE_PCM", "Sent ${value.size} bytes to PCM channel")
+                        }
+
+                        // 2) keep your float stream if you want waveform updates
+                        _heartSignalData.tryEmit(parseHeartSignalData(value))
                     }
+
 
                     HEART_RATE_MEASUREMENT_UUID -> {
                         val bpmValue = parseHeartRateMeasurement(value)
                         _bpm.value = bpmValue
+                        Log.d("BLE_BPM", "BPM: $bpmValue")
                     }
 
                 }
@@ -295,6 +334,8 @@ class BleManager @Inject constructor(
         }
         _isScanning.value = false
     }
+
+    fun pcmReceiveChannel(): ReceiveChannel<ByteArray> = pcmChannel
 
 
     @SuppressLint("ObsoleteSdkInt")
